@@ -10,7 +10,7 @@ An open reimplementation of an aerial impact-intelligence pipeline using public 
 src/impactlens/{data,models,geo,agents,aws}   package code
 notebooks/                                    Kaggle/Colab training notebooks
 tests/                                        pytest tests
-infra/                                        AWS CDK (Python)
+infra/                                        AWS Terraform + Makefile
 ```
 
 > Work in progress, building in phases. Current: data pipeline (Phase 2).
