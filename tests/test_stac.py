@@ -29,14 +29,14 @@ def _write(path, arr, dtype):
         dst.write(arr.astype(dtype), 1)
 
 
-def _fake_item(tmp_path, name, day, dn, scl_class):
+def _fake_item(tmp_path, name, day, dn, scl_class, **props):
     """A STAC item whose assets are local files: 4 bands of constant DN plus an SCL layer."""
     item = pystac.Item(
         id=name,
         geometry=None,
         bbox=None,
         datetime=datetime(2024, 10, day, tzinfo=UTC),
-        properties={"proj:epsg": 32630, "eo:cloud_cover": 5.0},
+        properties={"proj:epsg": 32630, "eo:cloud_cover": 5.0, **props},
     )
     raster = [{"scale": 0.0001, "offset": -0.1}]
     for key in ("blue", "green", "red", "nir"):
@@ -161,11 +161,45 @@ def test_cli_parser_and_no_scene_exit_code(tmp_path, aoi_file, monkeypatch, caps
     assert "Best candidates" in capsys.readouterr().out
 
 
-def test_offset_skipped_when_data_is_already_shifted(tmp_path, aoi_file, monkeypatch):
-    """Metadata says offset -0.1, but DN 300 (< 1000) proves it is already applied."""
-    item = _fake_item(tmp_path, "s", 1, dn=300, scl_class=4)
+def _offset_for(tmp_path, dn, **props):
+    """Run reflectance_params on a fake item and return (offset, source)."""
+    item = _fake_item(tmp_path, "s", 1, dn=dn, scl_class=4, **props)
+    _, offset, source = stac.reflectance_params(item, "blue", np.full((4, 4), dn))
+    return offset, source
+
+
+def test_offset_metadata_flag_wins_over_pixels(tmp_path):
+    # Flag says already applied -> no shift, even though DN 2000 "looks" shifted.
+    offset, source = _offset_for(tmp_path, 2000, **{"earthsearch:boa_offset_applied": True})
+    assert offset == 0.0 and "boa_offset_applied=True" in source
+    # Flag says not applied -> subtract 0.1, even though DN 300 would trigger the pixel check.
+    offset, source = _offset_for(tmp_path, 300, **{"earthsearch:boa_offset_applied": False})
+    assert offset == pytest.approx(-0.1) and "boa_offset_applied=False" in source
+
+
+def test_offset_falls_back_to_processing_baseline(tmp_path):
+    offset, source = _offset_for(tmp_path, 300, **{"s2:processing_baseline": "05.11"})
+    assert offset == pytest.approx(-0.1) and "processing_baseline=05.11" in source
+    offset, source = _offset_for(tmp_path, 2000, **{"s2:processing_baseline": "03.01"})
+    assert offset == 0.0 and "processing_baseline=03.01" in source
+
+
+def test_offset_pixel_check_is_last_resort(tmp_path):
+    offset, source = _offset_for(tmp_path, 300)  # no metadata; DN 300 < 1000 -> already shifted
+    assert offset == 0.0 and source.startswith("fallback")
+    offset, source = _offset_for(tmp_path, 2000)  # DN well above 1000 -> shift still in data
+    assert offset == pytest.approx(-0.1) and source.startswith("fallback")
+
+
+def test_fetch_pair_logs_and_records_offset_source(tmp_path, aoi_file, monkeypatch):
+    item = _fake_item(
+        tmp_path, "s", 1, dn=300, scl_class=4, **{"earthsearch:boa_offset_applied": True}
+    )
     _patch_search(monkeypatch, {"b": [item], "a": [item]})
+    lines = []
     out = tmp_path / "out"
-    stac.fetch_pair(aoi_file, "b", "a", out, log=lambda *_: None)
+    summary = stac.fetch_pair(aoi_file, "b", "a", out, log=lines.append)
+    assert any("boa_offset_applied=True" in line for line in lines)
+    assert summary["before"]["reflectance_offset"]["blue"]["offset"] == 0.0
     with rasterio.open(out / "before.tif") as b:
         assert b.read(1).mean() == pytest.approx(0.03, abs=1e-5)  # not clipped to 0

@@ -133,21 +133,49 @@ def item_crs(item) -> CRS:
         return src.crs
 
 
-def _scale_offset(item, key: str, dn: np.ndarray) -> tuple[float, float]:
-    """Reflectance scale/offset for one band.
+def reflectance_params(item, key: str, dn: np.ndarray) -> tuple[float, float, str]:
+    """Return (scale, offset, source) for converting one band's DN to reflectance.
 
-    STAC metadata says offset = -0.1 (the +1000 DN shift of processing baseline 04.00+), but
-    some Earth Search COGs are already shifted back, so applying it would clip most pixels to
-    zero (we hit this with Valencia: 92% zeros). Real reflectance can't be negative, so if the
-    data contains non-zero DNs well below 1000 the offset is already baked in: skip it.
+    Sentinel-2 processing baseline 04.00+ stores DN with a +1000 shift (offset -0.1 in STAC),
+    but Earth Search may already have removed it. Applying it twice clips most pixels to zero
+    (we hit this on Valencia: 92% zeros). Decision order:
+
+    1. ``earthsearch:boa_offset_applied`` in the item properties (authoritative).
+    2. ``s2:processing_baseline``: >= 04.00 means the shift is in the data, older means no shift.
+    3. Fallback: look at the pixels. Real reflectance can't be negative, so non-zero DNs well
+       below 1000 mean the shift is already gone.
+
+    ``source`` says which rule decided, so it can be logged.
     """
     bands = item.assets[key].extra_fields.get("raster:bands") or [{}]
     scale = float(bands[0].get("scale", 1e-4))
-    offset = float(bands[0].get("offset", 0.0))
+    shift = float(bands[0].get("offset", -0.1))  # the offset to apply if the shift is present
+    props = item.properties
+
+    applied = props.get("earthsearch:boa_offset_applied")
+    if applied is not None:
+        # "applied" = Earth Search already removed the shift, so we must not subtract again.
+        return (
+            scale,
+            (0.0 if applied else shift),
+            f"metadata (earthsearch:boa_offset_applied={applied})",
+        )
+
+    baseline = props.get("s2:processing_baseline")
+    try:
+        needs_shift = float(baseline) >= 4.0
+    except (TypeError, ValueError):
+        needs_shift = None
+    if needs_shift is not None:
+        return (
+            scale,
+            (shift if needs_shift else 0.0),
+            f"metadata (s2:processing_baseline={baseline})",
+        )
+
     valid = dn[dn > 0]
-    if offset != 0.0 and valid.size and np.percentile(valid, 1) < 0.9 * (-offset / scale):
-        offset = 0.0
-    return scale, offset
+    shifted_in_data = not (valid.size and np.percentile(valid, 1) < 0.9 * (-shift / scale))
+    return scale, (shift if shifted_in_data else 0.0), "fallback (pixel values)"
 
 
 # --------------------------------------------------------------------- scene selection
@@ -229,12 +257,17 @@ def format_candidates(cands: list[Candidate]) -> str:
 # ------------------------------------------------------------------------------ output
 
 
-def write_scene(item, grid: Grid, path: Path) -> None:
-    """Read RGB+NIR for ``item`` onto ``grid`` and save as a 4-band float32 reflectance GeoTIFF."""
+def write_scene(item, grid: Grid, path: Path) -> dict:
+    """Read RGB+NIR for ``item`` onto ``grid`` and save as a 4-band float32 reflectance GeoTIFF.
+
+    Returns which reflectance offset was used and why (see ``reflectance_params``).
+    """
     bands = []
+    decisions = {}
     for key in BAND_NAMES:
         dn = read_band(_href(item, key), grid, Resampling.bilinear)
-        scale, offset = _scale_offset(item, key, dn)
+        scale, offset, source = reflectance_params(item, key, dn)
+        decisions[key] = {"scale": scale, "offset": offset, "source": source}
         bands.append(dn_to_reflectance(dn, scale, offset))
     path.parent.mkdir(parents=True, exist_ok=True)
     profile = {
@@ -257,6 +290,7 @@ def write_scene(item, grid: Grid, path: Path) -> None:
         dst.update_tags(
             scene_id=item.id, datetime=item.datetime.isoformat() if item.datetime else ""
         )
+    return decisions
 
 
 def fetch_pair(
@@ -292,9 +326,12 @@ def fetch_pair(
 
     # Shared grid in the "before" scene's UTM zone; the "after" scene is warped onto it.
     grid = make_grid(aoi, item_crs(chosen["before"].item))
+    offsets = {}
     for label in ("before", "after"):
         log(f"[{label}] reading AOI window ({grid.width}x{grid.height} px) ...")
-        write_scene(chosen[label].item, grid, out_dir / f"{label}.tif")
+        offsets[label] = write_scene(chosen[label].item, grid, out_dir / f"{label}.tif")
+        first = offsets[label]["blue"]
+        log(f"[{label}] reflectance offset {first['offset']:+g} via {first['source']}")
 
     summary = {
         "aoi": str(aoi_path),
@@ -313,6 +350,7 @@ def fetch_pair(
                 "tile_cloud_pct": c.tile_cloud,
                 "aoi_cloud_pct": c.aoi_cloud,
                 "window": window,
+                "reflectance_offset": offsets[label],
             }
             for (label, c), window in zip(chosen.items(), (before, after), strict=True)
         },

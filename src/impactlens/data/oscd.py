@@ -25,7 +25,12 @@ import rasterio
 import torch
 from torch.utils.data import Dataset
 
-from impactlens.data.preprocess import OSCD_BAND_FILES, dn_to_reflectance, normalize
+from impactlens.data.preprocess import (
+    OSCD_BAND_FILES,
+    dn_to_reflectance,
+    normalize,
+    random_flip_rotate,
+)
 
 TILE_SIZE = 256
 
@@ -171,9 +176,5 @@ class OSCDDataset(Dataset):
         # Stack so every transform hits all three identically: (4 + 4 + 1, T, T).
         x = torch.from_numpy(np.concatenate([img1, img2, mask], axis=0))
         if self.augment:
-            if torch.rand(1) < 0.5:
-                x = torch.flip(x, dims=(-1,))  # horizontal flip
-            if torch.rand(1) < 0.5:
-                x = torch.flip(x, dims=(-2,))  # vertical flip
-            x = torch.rot90(x, int(torch.randint(0, 4, (1,))), dims=(-2, -1))
+            x = random_flip_rotate(x)
         return {"img1": x[:4], "img2": x[4:8], "mask": x[8:9], "city": city.name}
