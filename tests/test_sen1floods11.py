@@ -6,7 +6,7 @@ import rasterio
 import torch
 from rasterio.transform import from_origin
 
-from impactlens.data.preprocess import BAND_CLIPS
+from impactlens.data.preprocess import FLOOD_BAND_CLIPS
 from impactlens.data.sen1floods11 import Sen1Floods11Dataset, read_chip_ids
 
 SIZE = 300
@@ -59,16 +59,16 @@ def test_shapes_and_tiling(root):
     ds = Sen1Floods11Dataset(root, "train", tile=128)
     assert len(ds) == 2 * 9  # 300 px -> starts 0, 128, 172 -> 3x3 tiles per chip
     item = ds[0]
-    assert item["img"].shape == (4, 128, 128)
+    assert item["img"].shape == (6, 128, 128)
     assert item["mask"].shape == item["valid"].shape == (1, 128, 128)
     assert item["chip"] == "Ghana_1"
 
 
-def test_uses_b2_b3_b4_b8_with_shared_normalization(root):
+def test_uses_b2_b3_b4_b8_b11_b12_with_shared_normalization(root):
     img = Sen1Floods11Dataset(root, "train", tile=128)[0]["img"]
-    # DNs of B2, B3, B4, B8 are 200, 300, 400, 800 -> reflectance 0.02 ... 0.08,
-    # then divided by each band's clip ceiling.
-    expected = np.array([200, 300, 400, 800]) * 1e-4 / np.array(BAND_CLIPS)
+    # DNs of B2, B3, B4, B8, B11, B12 are 200, 300, 400, 800, 1200, 1300 -> reflectance 0.02 ...
+    # 0.13, then divided by each band's clip ceiling.
+    expected = np.array([200, 300, 400, 800, 1200, 1300]) * 1e-4 / np.array(FLOOD_BAND_CLIPS)
     assert np.allclose(img.mean(dim=(1, 2)).numpy(), expected, atol=1e-6)
 
 
@@ -84,7 +84,7 @@ def test_water_and_ignore_labels(root):
 
 def test_padding_is_marked_invalid(root):
     item = Sen1Floods11Dataset(root, "train", tile=320)[0]  # bigger than the 300 px chip
-    assert item["img"].shape == (4, 320, 320)
+    assert item["img"].shape == (6, 320, 320)
     assert item["valid"][0, 300:, :].max() == 0 and item["valid"][0, :, 300:].max() == 0
 
 

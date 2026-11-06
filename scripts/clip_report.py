@@ -16,32 +16,38 @@ import numpy as np
 import rasterio
 
 from impactlens.data import oscd
-from impactlens.data.preprocess import BAND_CLIPS, BAND_NAMES, dn_to_reflectance
-from impactlens.data.sen1floods11 import S2_BAND_INDEXES, read_chip_ids
+from impactlens.data.preprocess import (
+    BAND_CLIPS,
+    FLOOD_BAND_CLIPS,
+    FLOOD_BAND_NAMES,
+    dn_to_reflectance,
+)
+from impactlens.data.sen1floods11 import FLOOD_BAND_INDEXES, read_chip_ids
 
 warnings.filterwarnings("ignore")
 
 OSCD_ROOT = Path("data/raw/oscd")
 S1F_ROOT = Path("data/raw/sen1floods11")
 VALENCIA = Path("data/processed/valencia_albufera")
-THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.8)
+THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 
 
 class Acc:
     """Accumulates exceedance counts and a subsample for one dataset, per band."""
 
-    def __init__(self):
+    def __init__(self, n_bands: int = 4):
+        self.n = n_bands
         self.total = 0
-        self.over = np.zeros((4, len(THRESHOLDS)))
-        self.sample = [[] for _ in range(4)]
+        self.over = np.zeros((n_bands, len(THRESHOLDS)))
+        self.sample = [[] for _ in range(n_bands)]
         self.veg_total = 0
         self.veg_nir_over = np.zeros(len(THRESHOLDS))
 
     def add(self, refl: np.ndarray) -> None:
-        """refl: (4, H, W) reflectance (blue, green, red, nir) before clipping."""
-        refl = refl.reshape(4, -1)
+        """refl: (C, H, W) reflectance (blue, green, red, nir[, swir16, swir22]) before clipping."""
+        refl = refl.reshape(self.n, -1)
         self.total += refl.shape[1]
-        for b in range(4):
+        for b in range(self.n):
             for k, thr in enumerate(THRESHOLDS):
                 self.over[b, k] += (refl[b] > thr).sum()
             self.sample[b].append(refl[b][::64])
@@ -57,7 +63,7 @@ class Acc:
         print(f"\n=== {title}  ({self.total / 1e6:.1f} M pixels) ===")
         head = "  band   " + "".join(f">{t:<6}" for t in THRESHOLDS) + "  p99    p99.9  max"
         print(head + "   (% of pixels above threshold)")
-        for b, name in enumerate(BAND_NAMES):
+        for b, name in enumerate(FLOOD_BAND_NAMES[: self.n]):
             s = np.concatenate(self.sample[b])
             row = "".join(
                 f"{100 * self.over[b, k] / self.total:<7.2f}" for k in range(len(THRESHOLDS))
@@ -72,9 +78,10 @@ class Acc:
             share = 100 * self.veg_total / self.total
             print(f"  NIR of vegetation (NDVI>0.6, {share:.1f}% of pixels): % above -> {row}")
         clipped = []
-        for b, name in enumerate(BAND_NAMES):
-            k = THRESHOLDS.index(BAND_CLIPS[b])
-            clipped.append(f"{name}@{BAND_CLIPS[b]} {100 * self.over[b, k] / self.total:.2f}%")
+        clips = FLOOD_BAND_CLIPS if self.n == 6 else BAND_CLIPS
+        for b, name in enumerate(FLOOD_BAND_NAMES[: self.n]):
+            k = THRESHOLDS.index(clips[b])
+            clipped.append(f"{name}@{clips[b]} {100 * self.over[b, k] / self.total:.2f}%")
         print("  currently clipped (per-band ceilings): " + ", ".join(clipped))
 
 
@@ -87,14 +94,14 @@ def main() -> None:
                 acc.add(oscd._read_bands(oscd._band_folder(d, which)))
     acc.print("OSCD (L1C, all 24 cities, both dates)")
 
-    acc = Acc()
+    acc = Acc(6)
     for split in ("train", "valid", "test", "bolivia"):
         for chip in read_chip_ids(S1F_ROOT, split):
             with rasterio.open(S1F_ROOT / "S2Hand" / f"{chip}_S2Hand.tif") as src:
-                acc.add(dn_to_reflectance(src.read(list(S2_BAND_INDEXES))))
-    acc.print("Sen1Floods11 (L1C, all 446 chips)")
+                acc.add(dn_to_reflectance(src.read(list(FLOOD_BAND_INDEXES))))
+    acc.print("Sen1Floods11 (L1C, all 446 chips, 6 bands)")
 
-    acc = Acc()
+    acc = Acc(6)
     for name in ("before", "after"):
         with rasterio.open(VALENCIA / f"{name}.tif") as src:
             acc.add(src.read())

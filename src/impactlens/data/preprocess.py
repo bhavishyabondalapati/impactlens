@@ -13,6 +13,11 @@ import torch
 
 # Order of the 4 channels everywhere in this project: RGB + near-infrared.
 BAND_NAMES = ("blue", "green", "red", "nir")
+# The flood model also sees the two shortwave-infrared bands (B11 ~1.6 um, B12 ~2.2 um): water
+# absorbs SWIR almost completely, so it separates water from dark shadows and wet soil far
+# better than RGB+NIR alone. They are native 20 m bands; Sen1Floods11 chips and our STAC fetch
+# both resample them to the 10 m grid. OSCD stays at 4 bands (the first four of these).
+FLOOD_BAND_NAMES = (*BAND_NAMES, "swir16", "swir22")
 # Sentinel-2 band IDs for the same four channels (used by the OSCD file names).
 OSCD_BAND_FILES = ("B02", "B03", "B04", "B08")
 
@@ -22,6 +27,12 @@ OSCD_BAND_FILES = ("B02", "B03", "B04", "B08")
 # Sen1Floods11 NIR (and 6-8% of healthy-vegetation NIR), so a model could not tell healthy
 # crops from merely bright ones. NIR gets more headroom because vegetation is NIR-bright.
 BAND_CLIPS = (0.5, 0.5, 0.5, 0.6)
+# SWIR (measured, see docs/clip_report.txt): B11 clips 0.97% of Sen1Floods11 pixels at 0.5; B12 is
+# darker (p99.9 = 0.47, max 0.67), so 0.4 keeps resolution and clips only 0.5%.
+SWIR16_CLIP, SWIR22_CLIP = 0.5, 0.4
+# Ceilings for the six flood-model bands: the four above plus B11 and B12 (set from
+# scripts/clip_report.py, see docs/clip_report.txt).
+FLOOD_BAND_CLIPS = (*BAND_CLIPS, SWIR16_CLIP, SWIR22_CLIP)
 
 
 def dn_to_reflectance(dn: np.ndarray, scale: float = 1e-4, offset: float = 0.0) -> np.ndarray:
@@ -31,14 +42,17 @@ def dn_to_reflectance(dn: np.ndarray, scale: float = 1e-4, offset: float = 0.0) 
     return np.clip(refl, 0.0, None)
 
 
-def normalize(reflectance: np.ndarray) -> np.ndarray:
-    """Map reflectance to [0, 1] with fixed per-band ceilings (``BAND_CLIPS``).
+def normalize(reflectance: np.ndarray, band_clips: tuple[float, ...] = BAND_CLIPS) -> np.ndarray:
+    """Map reflectance to [0, 1] with fixed per-band ceilings (default ``BAND_CLIPS``).
 
-    Works on (4, H, W) or batched (N, 4, H, W) arrays: the band axis is always third from last.
+    Works on (C, H, W) or batched (N, C, H, W) arrays: the band axis is always third from last.
+    Pass ``FLOOD_BAND_CLIPS`` for the 6-band flood input.
     """
-    if reflectance.ndim < 3 or reflectance.shape[-3] != len(BAND_CLIPS):
-        raise ValueError(f"expected (..., 4, H, W) bands, got shape {reflectance.shape}")
-    clips = np.asarray(BAND_CLIPS, dtype=np.float32).reshape(-1, 1, 1)
+    if reflectance.ndim < 3 or reflectance.shape[-3] != len(band_clips):
+        raise ValueError(
+            f"expected (..., {len(band_clips)}, H, W) bands, got shape {reflectance.shape}"
+        )
+    clips = np.asarray(band_clips, dtype=np.float32).reshape(-1, 1, 1)
     return (np.clip(reflectance, 0.0, clips) / clips).astype(np.float32)
 
 

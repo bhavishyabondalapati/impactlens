@@ -14,7 +14,7 @@ import numpy as np
 import rasterio
 
 from impactlens.data.oscd import OSCDDataset
-from impactlens.data.preprocess import BAND_NAMES
+from impactlens.data.preprocess import FLOOD_BAND_NAMES
 from impactlens.data.sen1floods11 import SPLITS, Sen1Floods11Dataset
 
 warnings.filterwarnings("ignore", category=rasterio.errors.NotGeoreferencedWarning)
@@ -27,7 +27,7 @@ OUT = Path("docs/images")
 def band_range(mins, maxs, means) -> str:
     return "  ".join(
         f"{n}: [{lo:.3f}, {hi:.3f}] mean {m:.3f}"
-        for n, lo, hi, m in zip(BAND_NAMES, mins, maxs, means, strict=True)
+        for n, lo, hi, m in zip(FLOOD_BAND_NAMES, mins, maxs, means, strict=True)
     )
 
 
@@ -109,7 +109,7 @@ def report_s1f() -> None:
     best = (-1.0, None)
     for split in SPLITS:
         ds = Sen1Floods11Dataset(S1F_ROOT, split)
-        mins, maxs, sums = np.full(4, 9.0), np.full(4, -9.0), np.zeros(4)
+        mins, maxs, sums = np.full(6, 9.0), np.full(6, -9.0), np.zeros(6)
         water = valid = total = tiles_with_water = 0
         for i in range(len(ds)):
             t = ds[i]

@@ -23,7 +23,7 @@ from shapely.geometry import mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from impactlens.data.preprocess import BAND_NAMES, dn_to_reflectance
+from impactlens.data.preprocess import FLOOD_BAND_NAMES, dn_to_reflectance
 
 EARTH_SEARCH_URL = "https://earth-search.aws.element84.com/v1"
 COLLECTION = "sentinel-2-l2a"
@@ -258,13 +258,17 @@ def format_candidates(cands: list[Candidate]) -> str:
 
 
 def write_scene(item, grid: Grid, path: Path) -> dict:
-    """Read RGB+NIR for ``item`` onto ``grid`` and save as a 4-band float32 reflectance GeoTIFF.
+    """Read RGB+NIR+SWIR for ``item`` onto ``grid``; save a 6-band float32 reflectance GeoTIFF.
+
+    Band order is ``FLOOD_BAND_NAMES``: blue, green, red, nir, swir16, swir22. The change model
+    uses the first four; the flood model uses all six. The 20 m SWIR bands are resampled
+    (bilinear) onto the 10 m grid when read.
 
     Returns which reflectance offset was used and why (see ``reflectance_params``).
     """
     bands = []
     decisions = {}
-    for key in BAND_NAMES:
+    for key in FLOOD_BAND_NAMES:
         dn = read_band(_href(item, key), grid, Resampling.bilinear)
         scale, offset, source = reflectance_params(item, key, dn)
         decisions[key] = {"scale": scale, "offset": offset, "source": source}
@@ -284,7 +288,7 @@ def write_scene(item, grid: Grid, path: Path) -> dict:
         "blockysize": 256,
     }
     with rasterio.open(path, "w", **profile) as dst:
-        for i, (arr, name) in enumerate(zip(bands, BAND_NAMES, strict=True), start=1):
+        for i, (arr, name) in enumerate(zip(bands, FLOOD_BAND_NAMES, strict=True), start=1):
             dst.write(arr, i)
             dst.set_band_description(i, name)
         dst.update_tags(

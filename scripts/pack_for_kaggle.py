@@ -28,6 +28,7 @@ DESCRIPTION = (
     "Preprocessed RGB+NIR tiles for the ImpactLens project (github.com/<you>/impactlens). "
     "oscd.npz: Onera Satellite Change Detection (Daudt et al.) change masks. "
     "sen1floods11.npz: Sen1Floods11 hand-labeled flood water masks (Bonafilia et al.). "
+    "oscd.npz has 4 bands (blue, green, red, nir); sen1floods11.npz has 6 (adds swir16, swir22). "
     "Bands are normalized to [0,1] with fixed per-band ceilings and stored as uint8. "
     "Derived from the original datasets; see their licenses before redistributing."
 )
@@ -37,10 +38,12 @@ def _mb(path: Path) -> float:
     return path.stat().st_size / 1e6
 
 
-def verify(oscd_raw: Path, s1f_raw: Path, oscd_npz: Path, s1f_npz: Path) -> None:
+def verify(
+    oscd_raw: Path, s1f_raw: Path, oscd_npz: Path, s1f_npz: Path, only: str = "both"
+) -> None:
     """Compare packed vs raw datasets: same tile counts, same masks, pixels within 1/255."""
     tol = 0.5 / 255 + 1e-6
-    for split in ("train", "val", "test"):
+    for split in ("train", "val", "test") if only in ("both", "oscd") else ():
         raw, packed = OSCDDataset(oscd_raw, split), OSCDDataset(oscd_npz, split)
         assert len(raw) == len(packed), f"oscd {split}: tile count differs"
         for i in range(0, len(raw), max(1, len(raw) // 10)):  # a spread of ~10 tiles
@@ -49,7 +52,7 @@ def verify(oscd_raw: Path, s1f_raw: Path, oscd_npz: Path, s1f_npz: Path) -> None
             err = max((a[k] - b[k]).abs().max().item() for k in ("img1", "img2"))
             assert err <= tol, f"oscd {split} tile {i}: pixel error {err}"
         print(f"  verified oscd {split}: {len(raw)} tiles")
-    for split in ("train", "valid", "test", "bolivia"):
+    for split in ("train", "valid", "test", "bolivia") if only in ("both", "floods") else ():
         raw, packed = Sen1Floods11Dataset(s1f_raw, split), Sen1Floods11Dataset(s1f_npz, split)
         assert len(raw) == len(packed), f"sen1floods11 {split}: tile count differs"
         for i in range(0, len(raw), max(1, len(raw) // 10)):
@@ -68,24 +71,33 @@ def main() -> None:
     p.add_argument("--kaggle-user", default="YOUR_KAGGLE_USERNAME")
     p.add_argument("--slug", default="impactlens-packed", help="Kaggle dataset name")
     p.add_argument("--no-verify", action="store_true")
+    p.add_argument(
+        "--only", choices=("both", "oscd", "floods"), default="both",
+        help="pack just one file (e.g. 'floods' after the SWIR change; oscd.npz is unchanged)",
+    )  # fmt: skip
     args = p.parse_args()
 
-    oscd_npz = pack_oscd(args.oscd_root, args.out / "oscd.npz")
-    s1f_npz = pack_sen1floods11(args.s1f_root, args.out / "sen1floods11.npz")
+    oscd_npz, s1f_npz = args.out / "oscd.npz", args.out / "sen1floods11.npz"
+    if args.only in ("both", "oscd"):
+        pack_oscd(args.oscd_root, oscd_npz)
+    if args.only in ("both", "floods"):
+        pack_sen1floods11(args.s1f_root, s1f_npz)
     if not args.no_verify:
-        verify(args.oscd_root, args.s1f_root, oscd_npz, s1f_npz)
+        verify(args.oscd_root, args.s1f_root, oscd_npz, s1f_npz, args.only)
 
     meta = {
         "title": "ImpactLens packed datasets",
         "id": f"{args.kaggle_user}/{args.slug}",
         "licenses": [{"name": "other"}],
-        "subtitle": "OSCD + Sen1Floods11 RGB+NIR tiles, packed for training",
+        "subtitle": "OSCD (4-band) + Sen1Floods11 (6-band) tiles, packed for training",
         "description": DESCRIPTION,
     }
     (args.out / "dataset-metadata.json").write_text(json.dumps(meta, indent=2))
 
     print(f"\nWrote to {args.out}/:")
     for f in (oscd_npz, s1f_npz, args.out / "dataset-metadata.json"):
+        if not f.exists():
+            continue
         print(f"  {f.name:28} {_mb(f):8.1f} MB")
     print(f"  total upload: {sum(_mb(f) for f in args.out.iterdir()):.1f} MB")
     print(f"Kaggle dataset id: {meta['id']}  (input path: /kaggle/input/{args.slug})")

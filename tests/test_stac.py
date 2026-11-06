@@ -39,7 +39,7 @@ def _fake_item(tmp_path, name, day, dn, scl_class, **props):
         properties={"proj:epsg": 32630, "eo:cloud_cover": 5.0, **props},
     )
     raster = [{"scale": 0.0001, "offset": -0.1}]
-    for key in ("blue", "green", "red", "nir"):
+    for key in ("blue", "green", "red", "nir", "swir16", "swir22"):
         path = tmp_path / f"{name}_{key}.tif"
         _write(path, np.full((SIZE, SIZE), dn), "uint16")
         item.add_asset(key, pystac.Asset(href=str(path), extra_fields={"raster:bands": raster}))
@@ -128,7 +128,16 @@ def test_fetch_pair_picks_clearest_and_writes_aligned_tifs(tmp_path, aoi_file, m
     assert summary["before"]["scene_id"] == "clear_before"
     assert summary["after"]["scene_id"] == "clear_after"
     with rasterio.open(out / "before.tif") as b, rasterio.open(out / "after.tif") as a:
-        assert b.count == a.count == 4
+        assert b.count == a.count == 6
+        assert [b.descriptions[i] for i in range(6)] == [
+            "blue",
+            "green",
+            "red",
+            "nir",
+            "swir16",
+            "swir22",
+        ]
+        assert b.read(6).mean() == pytest.approx(0.1, abs=1e-5)  # SWIR is read like the others
         assert b.transform == a.transform and b.crs == a.crs and b.shape == a.shape
         # DN 2000 * 1e-4 - 0.1 offset = 0.1 reflectance
         assert b.read(1).mean() == pytest.approx(0.1, abs=1e-5)

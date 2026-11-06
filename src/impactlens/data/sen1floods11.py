@@ -33,12 +33,18 @@ import torch
 from torch.utils.data import Dataset
 
 from impactlens.data.oscd import tile_starts
-from impactlens.data.preprocess import dn_to_reflectance, normalize, random_flip_rotate
+from impactlens.data.preprocess import (
+    FLOOD_BAND_CLIPS,
+    dn_to_reflectance,
+    normalize,
+    random_flip_rotate,
+)
 
 SPLITS = ("train", "valid", "test", "bolivia")
-# 1-based positions of B2, B3, B4, B8 (blue, green, red, nir) in the 13-band chip
-# (order: B1 B2 B3 B4 B5 B6 B7 B8 B8A B9 B10 B11 B12). Same channel order as OSCD / STAC.
-S2_BAND_INDEXES = (2, 3, 4, 8)
+# 1-based positions of B2, B3, B4, B8, B11, B12 (blue, green, red, nir, swir16, swir22) in the
+# 13-band chip (order: B1 B2 B3 B4 B5 B6 B7 B8 B8A B9 B10 B11 B12). Same channel order as the
+# STAC fetch; the first four match OSCD. The chips are already resampled to 10 m.
+FLOOD_BAND_INDEXES = (2, 3, 4, 8, 12, 13)
 CHIP_BANDS = 13
 TILE_SIZE = 256
 
@@ -74,18 +80,18 @@ def _chip_paths(root: Path, chip: str) -> tuple[Path, Path]:
 
 
 def read_chip(root: str | Path, chip: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read one whole chip: normalized (4, H, W) float32 image, water uint8, valid uint8."""
+    """Read one whole chip: normalized (6, H, W) float32 image, water uint8, valid uint8."""
     import rasterio  # lazy: the packed-npz path (Kaggle) does not need rasterio
 
     image_path, label_path = _chip_paths(Path(root), chip)
     with rasterio.open(image_path) as src:
         if src.count != CHIP_BANDS:
             raise ValueError(f"{image_path} has {src.count} bands, expected {CHIP_BANDS}")
-        dn = src.read(list(S2_BAND_INDEXES))
+        dn = src.read(list(FLOOD_BAND_INDEXES))
     with rasterio.open(label_path) as src:
         label = src.read(1)
     return (
-        normalize(dn_to_reflectance(dn)),
+        normalize(dn_to_reflectance(dn), FLOOD_BAND_CLIPS),
         (label == 1).astype(np.uint8),
         (label != -1).astype(np.uint8),
     )
@@ -105,8 +111,8 @@ class Sen1Floods11Dataset(Dataset):
     ``root`` is the raw Sen1Floods11 folder (tiles are read lazily from disk) or a packed
     ``sen1floods11.npz`` made by scripts/pack_for_kaggle.py (everything held in memory).
 
-    Each item is a dict: ``img`` (4, T, T) float32 in [0, 1] (B2,B3,B4,B8, same normalization as
-    everything else), ``mask`` (1, T, T) float32 with 1 = water, ``valid`` (1, T, T) float32
+    Each item is a dict: ``img`` (6, T, T) float32 in [0, 1] (B2,B3,B4,B8,B11,B12; ceilings in
+    ``FLOOD_BAND_CLIPS``), ``mask`` (1, T, T) float32 with 1 = water, ``valid`` (1, T, T) float32
     with 0 where the label is -1 (ignore), and ``chip``.
     """
 
@@ -151,7 +157,7 @@ class Sen1Floods11Dataset(Dataset):
         return len(self.index)
 
     def _read_window(self, ci: int, r: int, c: int):
-        """Normalized image (4,h,w) float32, water (h,w) and valid (h,w) for one window."""
+        """Normalized image (6,h,w) float32, water (h,w) and valid (h,w) for one window."""
         t = self.tile
         if self._packed is not None:
             from impactlens.data.packed import dequantize
@@ -166,10 +172,10 @@ class Sen1Floods11Dataset(Dataset):
         image_path, label_path = _chip_paths(self.root, self.chips[ci])
         window = Window(c, r, t, t)  # rasterio clips this at the chip edge
         with rasterio.open(image_path) as src:
-            dn = src.read(list(S2_BAND_INDEXES), window=window)
+            dn = src.read(list(FLOOD_BAND_INDEXES), window=window)
         with rasterio.open(label_path) as src:
             label = src.read(1, window=window)
-        return normalize(dn_to_reflectance(dn)), label == 1, label != -1
+        return normalize(dn_to_reflectance(dn), FLOOD_BAND_CLIPS), label == 1, label != -1
 
     def __getitem__(self, idx: int) -> dict:
         ci, r, c = self.index[idx]
@@ -179,8 +185,8 @@ class Sen1Floods11Dataset(Dataset):
         water = _pad_to(water.astype(np.float32), t)[None]
         valid = _pad_to(valid.astype(np.float32), t)[None]  # padding counts as invalid
 
-        # Stack so every transform hits all three identically: (4 + 1 + 1, T, T).
+        # Stack so every transform hits all three identically: (6 + 1 + 1, T, T).
         x = torch.from_numpy(np.concatenate([img, water, valid], axis=0))
         if self.augment:
             x = random_flip_rotate(x)
-        return {"img": x[:4], "mask": x[4:5], "valid": x[5:6], "chip": self.chips[ci]}
+        return {"img": x[:6], "mask": x[6:7], "valid": x[7:8], "chip": self.chips[ci]}
