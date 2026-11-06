@@ -1,0 +1,30 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Data and model artifacts (never commit)
+data/
+*.tif
+*.tiff
+*.onnx
+*.pt
+*.pth
+*.faiss
+
+# Notebooks / infra
+.ipynb_checkpoints/
+cdk.out/
+node_modules/
