@@ -1,0 +1,27 @@
+
+=== OSCD (L1C, all 24 cities, both dates)  (19.2 M pixels) ===
+  band   >0.3   >0.4   >0.5   >0.6   >0.8     p99    p99.9  max   (% of pixels above threshold)
+  blue   0.45   0.11   0.03   0.00   0.00    0.277  0.405  1.08
+  green  1.71   0.14   0.04   0.00   0.00    0.311  0.426  1.62
+  red    7.63   0.53   0.09   0.03   0.00    0.386  0.485  1.65
+  nir    15.44  3.11   0.13   0.03   0.00    0.430  0.517  2.51
+  NIR of vegetation (NDVI>0.6, 4.4% of pixels): % above -> 49.4   5.8    0.4    0.0    0.0    
+  currently clipped (per-band ceilings): blue@0.5 0.03%, green@0.5 0.04%, red@0.5 0.09%, nir@0.6 0.03%
+
+=== Sen1Floods11 (L1C, all 446 chips)  (116.9 M pixels) ===
+  band   >0.3   >0.4   >0.5   >0.6   >0.8     p99    p99.9  max   (% of pixels above threshold)
+  blue   3.53   1.72   0.77   0.28   0.01    0.471  0.687  1.00
+  green  3.29   1.60   0.70   0.25   0.01    0.461  0.677  1.00
+  red    3.61   1.78   0.86   0.35   0.03    0.482  0.719  1.08
+  nir    34.35  5.13   1.42   0.50   0.03    0.536  0.730  1.07
+  NIR of vegetation (NDVI>0.6, 21.2% of pixels): % above -> 74.5   8.3    0.3    0.0    0.0    
+  currently clipped (per-band ceilings): blue@0.5 0.77%, green@0.5 0.70%, red@0.5 0.86%, nir@0.6 0.50%
+
+=== Valencia AOI (L2A, before + after)  (4.7 M pixels) ===
+  band   >0.3   >0.4   >0.5   >0.6   >0.8     p99    p99.9  max   (% of pixels above threshold)
+  blue   0.50   0.28   0.12   0.02   0.00    0.222  0.525  1.78
+  green  0.66   0.34   0.17   0.05   0.00    0.270  0.559  1.68
+  red    1.22   0.37   0.18   0.06   0.01    0.316  0.562  1.62
+  nir    6.72   1.13   0.28   0.06   0.01    0.411  0.569  1.57
+  NIR of vegetation (NDVI>0.6, 13.0% of pixels): % above -> 22.0   5.0    1.1    0.0    0.0    
+  currently clipped (per-band ceilings): blue@0.5 0.12%, green@0.5 0.17%, red@0.5 0.18%, nir@0.6 0.06%

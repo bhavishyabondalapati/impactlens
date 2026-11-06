@@ -6,7 +6,7 @@ import rasterio
 import torch
 from rasterio.transform import from_origin
 
-from impactlens.data.preprocess import REFLECTANCE_CLIP
+from impactlens.data.preprocess import BAND_CLIPS
 from impactlens.data.sen1floods11 import Sen1Floods11Dataset, read_chip_ids
 
 SIZE = 300
@@ -66,8 +66,9 @@ def test_shapes_and_tiling(root):
 
 def test_uses_b2_b3_b4_b8_with_shared_normalization(root):
     img = Sen1Floods11Dataset(root, "train", tile=128)[0]["img"]
-    # DNs of B2, B3, B4, B8 are 200, 300, 400, 800 -> reflectance 0.02 ... 0.08, then /clip.
-    expected = np.array([200, 300, 400, 800]) * 1e-4 / REFLECTANCE_CLIP
+    # DNs of B2, B3, B4, B8 are 200, 300, 400, 800 -> reflectance 0.02 ... 0.08,
+    # then divided by each band's clip ceiling.
+    expected = np.array([200, 300, 400, 800]) * 1e-4 / np.array(BAND_CLIPS)
     assert np.allclose(img.mean(dim=(1, 2)).numpy(), expected, atol=1e-6)
 
 
