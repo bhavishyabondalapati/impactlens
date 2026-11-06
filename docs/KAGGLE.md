@@ -39,8 +39,9 @@ in Kaggle *Secrets*, never pasted into the notebook).
    `notebooks/train_kaggle.ipynb`.
 2. Right panel: **Accelerator** = GPU T4 x2 (or P100); **Internet** = On (Kaggle asks for phone
    verification once); **Add Input** -> your `impactlens-packed` dataset.
-3. Edit `REPO_URL` in the first code cell.
-4. **Run All**. Sections 1-3 (clone, install, data check) work today. Section 4 trains once
-   `train.py` exists (Phase 3).
+3. `REPO_URL` already points at `github.com/bhavishyabondalapati/impactlens`; the repo must be
+   pushed (public) before the clone works.
+4. **Run All**. Sections 1-3 clone, install and check the data; section 4 trains both models
+   (`--task oscd`, then `--task floods`) into `/kaggle/working/oscd` and `/kaggle/working/floods`.
 5. **Save Version** -> *Save & Run All (Commit)* so outputs persist; download them from the
    notebook's **Output** tab into `models/` (gitignored).

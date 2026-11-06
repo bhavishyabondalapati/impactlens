@@ -34,5 +34,8 @@ def test_notebook_uses_the_packed_data_and_the_right_install_flags():
     text = "\n".join(_code_cells())
     assert "--no-deps" in text and "--ignore-requires-python" in text  # don't clobber Kaggle torch
     assert "oscd.npz" in text and "sen1floods11.npz" in text
-    assert "YOUR_GITHUB_USERNAME" in text  # placeholder the user must fill in
+    assert "github.com/bhavishyabondalapati/impactlens.git" in text
+    assert "YOUR_GITHUB_USERNAME" not in text
+    assert "impactlens.models.train" in text and '"oscd", "floods"' in text
+    assert "WORK}/{task}" in text  # outputs go to /kaggle/working
     assert "api_key" not in text.lower() and "kaggle.json" not in text  # no secrets in the notebook
