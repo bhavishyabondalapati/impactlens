@@ -1,0 +1,171 @@
+"""STAC fetcher tests. No network: scenes are local GeoTIFFs wrapped in fake STAC items."""
+
+import json
+from datetime import UTC, datetime
+
+import numpy as np
+import pystac
+import pytest
+import rasterio
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.transform import from_origin
+from rasterio.warp import transform_bounds
+from shapely.geometry import box
+
+from impactlens.cli import build_parser, main
+from impactlens.data import stac
+from impactlens.data.stac import Candidate, NoSceneError, cloud_stats, load_aoi, make_grid
+
+UTM = CRS.from_epsg(32630)
+LEFT, TOP, SIZE = 750_000.0, 4_370_000.0, 200  # 200x200 px @10 m = 2 km square
+
+
+def _write(path, arr, dtype):
+    with rasterio.open(
+        path, "w", driver="GTiff", height=SIZE, width=SIZE, count=1, dtype=dtype,
+        crs=UTM, transform=from_origin(LEFT, TOP, 10, 10),
+    ) as dst:  # fmt: skip
+        dst.write(arr.astype(dtype), 1)
+
+
+def _fake_item(tmp_path, name, day, dn, scl_class):
+    """A STAC item whose assets are local files: 4 bands of constant DN plus an SCL layer."""
+    item = pystac.Item(
+        id=name,
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 10, day, tzinfo=UTC),
+        properties={"proj:epsg": 32630, "eo:cloud_cover": 5.0},
+    )
+    raster = [{"scale": 0.0001, "offset": -0.1}]
+    for key in ("blue", "green", "red", "nir"):
+        path = tmp_path / f"{name}_{key}.tif"
+        _write(path, np.full((SIZE, SIZE), dn), "uint16")
+        item.add_asset(key, pystac.Asset(href=str(path), extra_fields={"raster:bands": raster}))
+    scl_path = tmp_path / f"{name}_scl.tif"
+    _write(scl_path, np.full((SIZE, SIZE), scl_class), "uint8")
+    item.add_asset("scl", pystac.Asset(href=str(scl_path)))
+    return item
+
+
+@pytest.fixture
+def aoi_file(tmp_path):
+    """An AOI (in lon/lat) well inside the fake 2 km scene."""
+    west, south, east, north = transform_bounds(UTM, "EPSG:4326", LEFT + 500, TOP - 1500,
+                                                LEFT + 1500, TOP - 500)  # fmt: skip
+    path = tmp_path / "aoi.geojson"
+    path.write_text(json.dumps(box(west, south, east, north).__geo_interface__))
+    return path
+
+
+def test_load_aoi_accepts_feature_collection_and_bare_geometry(tmp_path):
+    poly = box(0, 0, 1, 1)
+    bare = tmp_path / "bare.geojson"
+    bare.write_text(json.dumps(poly.__geo_interface__))
+    fc = tmp_path / "fc.geojson"
+    fc.write_text(json.dumps({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {}, "geometry": poly.__geo_interface__}]}))  # fmt: skip
+    assert load_aoi(bare).equals(poly)
+    assert load_aoi(fc).equals(poly)
+
+
+def test_repo_aoi_is_about_15km():
+    aoi = load_aoi("aoi/valencia_albufera.geojson")
+    grid = make_grid(aoi, UTM)
+    assert 13_000 < grid.width * 10 < 17_000
+    assert 13_000 < grid.height * 10 < 17_000
+
+
+def test_make_grid_is_snapped_and_covers_aoi(aoi_file):
+    aoi = load_aoi(aoi_file)
+    grid = make_grid(aoi, UTM)
+    assert grid.transform.a == 10 and grid.transform.e == -10
+    assert grid.transform.c % 10 == 0 and grid.transform.f % 10 == 0
+    w, s, e, n = transform_bounds("EPSG:4326", UTM, *aoi.bounds)
+    left, bottom, right, top = grid.bounds
+    assert left <= w and bottom <= s and right >= e and top >= n
+
+
+def test_cloud_stats():
+    scl = np.array([[0, 4, 4, 9], [8, 4, 3, 10]])  # 1 nodata, 7 valid, 4 cloudy classes
+    cloud, nodata = cloud_stats(scl)
+    assert nodata == pytest.approx(1 / 8)
+    assert cloud == pytest.approx(4 / 7)
+    assert cloud_stats(np.zeros((2, 2), dtype=np.uint8)) == (1.0, 1.0)
+
+
+def test_read_band_matches_grid_and_values(tmp_path, aoi_file):
+    item = _fake_item(tmp_path, "s", 1, dn=2000, scl_class=4)
+    grid = make_grid(load_aoi(aoi_file), UTM)
+    arr = stac.read_band(item.assets["red"].href, grid, Resampling.nearest)
+    assert arr.shape == (grid.height, grid.width)
+    assert (arr == 2000).all()
+
+
+def test_read_band_reprojects_between_utm_zones(tmp_path, aoi_file):
+    """A scene in a different CRS is warped onto the target grid (the 'after' scene case)."""
+    item = _fake_item(tmp_path, "s", 1, dn=1234, scl_class=4)
+    grid31 = make_grid(load_aoi(aoi_file), CRS.from_epsg(32631))
+    arr = stac.read_band(item.assets["red"].href, grid31, Resampling.nearest)
+    assert arr.shape == (grid31.height, grid31.width)
+    assert (arr[arr > 0] == 1234).all() and (arr > 0).mean() > 0.9
+
+
+def _patch_search(monkeypatch, items):
+    monkeypatch.setattr(stac, "search_items", lambda aoi, window, url=None: items[window])
+
+
+def test_fetch_pair_picks_clearest_and_writes_aligned_tifs(tmp_path, aoi_file, monkeypatch):
+    cloudy = _fake_item(tmp_path, "cloudy", 5, dn=3000, scl_class=9)
+    clear_a = _fake_item(tmp_path, "clear_before", 10, dn=2000, scl_class=4)
+    clear_b = _fake_item(tmp_path, "clear_after", 20, dn=3000, scl_class=4)
+    _patch_search(monkeypatch, {"b": [cloudy, clear_a], "a": [cloudy, clear_b]})
+
+    out = tmp_path / "out"
+    summary = stac.fetch_pair(aoi_file, "b", "a", out, max_cloud=20, log=lambda *_: None)
+
+    assert summary["before"]["scene_id"] == "clear_before"
+    assert summary["after"]["scene_id"] == "clear_after"
+    with rasterio.open(out / "before.tif") as b, rasterio.open(out / "after.tif") as a:
+        assert b.count == a.count == 4
+        assert b.transform == a.transform and b.crs == a.crs and b.shape == a.shape
+        # DN 2000 * 1e-4 - 0.1 offset = 0.1 reflectance
+        assert b.read(1).mean() == pytest.approx(0.1, abs=1e-5)
+        assert a.read(1).mean() == pytest.approx(0.2, abs=1e-5)
+    assert json.loads((out / "scenes.json").read_text())["grid"]["crs"] == "EPSG:32630"
+
+
+def test_fetch_pair_reports_candidates_when_nothing_clear(tmp_path, aoi_file, monkeypatch):
+    cloudy = _fake_item(tmp_path, "cloudy", 5, dn=3000, scl_class=9)
+    _patch_search(monkeypatch, {"b": [cloudy], "a": [cloudy]})
+    with pytest.raises(NoSceneError) as err:
+        stac.fetch_pair(aoi_file, "b", "a", tmp_path / "out", max_cloud=20, log=lambda *_: None)
+    assert set(err.value.failures) == {"before (b)", "after (a)"}
+    cand = err.value.failures["before (b)"][0]
+    assert isinstance(cand, Candidate) and cand.aoi_cloud == 100.0
+    assert not (tmp_path / "out" / "before.tif").exists()  # nothing written on failure
+
+
+def test_cli_parser_and_no_scene_exit_code(tmp_path, aoi_file, monkeypatch, capsys):
+    args = build_parser().parse_args(
+        ["fetch", "--aoi", "a.geojson", "--before", "x/y", "--after", "z/w", "--max-cloud", "10"]
+    )
+    assert args.max_cloud == 10 and args.command == "fetch"
+
+    cloudy = _fake_item(tmp_path, "cloudy", 5, dn=3000, scl_class=9)
+    _patch_search(monkeypatch, {"b": [cloudy], "a": [cloudy]})
+    code = main(["fetch", "--aoi", str(aoi_file), "--before", "b", "--after", "a",
+                 "--out", str(tmp_path / "o")])  # fmt: skip
+    assert code == 2
+    assert "Best candidates" in capsys.readouterr().out
+
+
+def test_offset_skipped_when_data_is_already_shifted(tmp_path, aoi_file, monkeypatch):
+    """Metadata says offset -0.1, but DN 300 (< 1000) proves it is already applied."""
+    item = _fake_item(tmp_path, "s", 1, dn=300, scl_class=4)
+    _patch_search(monkeypatch, {"b": [item], "a": [item]})
+    out = tmp_path / "out"
+    stac.fetch_pair(aoi_file, "b", "a", out, log=lambda *_: None)
+    with rasterio.open(out / "before.tif") as b:
+        assert b.read(1).mean() == pytest.approx(0.03, abs=1e-5)  # not clipped to 0
