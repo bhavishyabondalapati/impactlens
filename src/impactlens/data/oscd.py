@@ -11,6 +11,12 @@ Expected folder layout (you download and unzip OSCD into data/raw/oscd yourself)
         train_labels/<city>/cm/cm.png  # change mask, 255 = change
         test_labels/<city>/cm/cm.png
 
+The original download folder names also work as-is, no renaming needed:
+
+    data/raw/oscd/Onera Satellite Change Detection dataset - Images/
+    data/raw/oscd/Onera Satellite Change Detection dataset - Train Labels/
+    data/raw/oscd/Onera Satellite Change Detection dataset - Test Labels/
+
 The loader is forgiving: it also accepts imgs_1/imgs_2 (non-rectified), a ``labels/`` folder,
 and ``<city>-cm.tif`` label files.
 """
@@ -35,12 +41,33 @@ from impactlens.data.preprocess import (
 TILE_SIZE = 256
 
 
+def _find_dir(root: Path, names: tuple[str, ...], suffix: str) -> Path | None:
+    """First existing folder from ``names``, else any folder whose name ends with ``suffix``."""
+    for name in names:
+        if (root / name).is_dir():
+            return root / name
+    for child in sorted(root.iterdir()) if root.is_dir() else []:
+        if child.is_dir() and child.name.lower().endswith(suffix):
+            return child
+    return None
+
+
+def _images_dir(root: Path) -> Path:
+    """'images/' or the original '... - Images' folder; falls back to root itself."""
+    return _find_dir(root, ("images",), "- images") or root
+
+
+def _labels_dir(root: Path, split: str) -> Path | None:
+    """'<split>_labels/', 'labels/' or the original '... - Train Labels' folder."""
+    return _find_dir(root, (f"{split}_labels", "labels"), f"- {split} labels")
+
+
 def read_split(root: str | Path, split: str) -> list[str]:
     """Return the official list of city names for 'train' or 'test'."""
     if split not in ("train", "test"):
         raise ValueError(f"split must be 'train' or 'test', got {split!r}")
     root = Path(root)
-    for candidate in (root / "images" / f"{split}.txt", root / f"{split}.txt"):
+    for candidate in (_images_dir(root) / f"{split}.txt", root / f"{split}.txt"):
         if candidate.exists():
             text = candidate.read_text()
             return [c.strip() for c in text.replace("\n", ",").split(",") if c.strip()]
@@ -48,7 +75,7 @@ def read_split(root: str | Path, split: str) -> list[str]:
 
 
 def _find_city_dir(root: Path, city: str) -> Path:
-    for base in (root / "images", root):
+    for base in (_images_dir(root), root):
         if (base / city).is_dir():
             return base / city
     raise FileNotFoundError(f"No image folder for city {city!r} under {root}")
@@ -78,7 +105,8 @@ def _band_folder(city_dir: Path, which: int) -> Path:
 
 def _read_label(root: Path, city: str, split: str) -> np.ndarray:
     """Read the change mask as uint8 (1 = change, 0 = no change)."""
-    for label_dir in (root / f"{split}_labels", root / "labels", root / "images"):
+    label_dirs = [d for d in (_labels_dir(root, split), _images_dir(root)) if d is not None]
+    for label_dir in label_dirs:
         for path in (
             label_dir / city / "cm" / "cm.png",
             label_dir / city / "cm" / f"{city}-cm.tif",
@@ -138,8 +166,9 @@ class OSCDDataset(Dataset):
     """256x256 tiles of OSCD city pairs.
 
     Each item is a dict: ``img1`` and ``img2`` (4, T, T) float32 in [0, 1], ``mask`` (1, T, T)
-    float32 in {0, 1}, plus ``city``. With ``augment=True`` random flips and 90-degree
-    rotations are applied identically to both images and the mask.
+    float32 in {0, 1}, ``valid`` (1, T, T) float32 (0 on padding), plus ``city``. With
+    ``augment=True`` random flips and 90-degree rotations are applied identically to the
+    images, mask and valid-mask.
     """
 
     def __init__(
@@ -171,10 +200,20 @@ class OSCDDataset(Dataset):
         t = self.tile
         img1 = _pad_to(city.img1[:, r : r + t, c : c + t], t)
         img2 = _pad_to(city.img2[:, r : r + t, c : c + t], t)
-        mask = _pad_to(city.mask[r : r + t, c : c + t].astype(np.float32), t)[None]
+        raw_mask = city.mask[r : r + t, c : c + t].astype(np.float32)
+        mask = _pad_to(raw_mask, t)[None]
+        # 1 on real pixels, 0 on zero-padding (cities smaller than a tile, e.g. norcia is 241 px
+        # tall). Metrics and loss must ignore padding or it counts as easy "no change".
+        valid = _pad_to(np.ones_like(raw_mask), t)[None]
 
-        # Stack so every transform hits all three identically: (4 + 4 + 1, T, T).
-        x = torch.from_numpy(np.concatenate([img1, img2, mask], axis=0))
+        # Stack so every transform hits all layers identically: (4 + 4 + 1 + 1, T, T).
+        x = torch.from_numpy(np.concatenate([img1, img2, mask, valid], axis=0))
         if self.augment:
             x = random_flip_rotate(x)
-        return {"img1": x[:4], "img2": x[4:8], "mask": x[8:9], "city": city.name}
+        return {
+            "img1": x[:4],
+            "img2": x[4:8],
+            "mask": x[8:9],
+            "valid": x[9:10],
+            "city": city.name,
+        }

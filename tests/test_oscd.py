@@ -96,3 +96,38 @@ def test_augment_keeps_mask_aligned_with_images(oscd_root):
         assert a["mask"].sum() == b["mask"].sum()
         # Whatever happened to the mask also happened to the image: sorted values match.
         assert torch.allclose(a["img1"].flatten().sort().values, b["img1"].flatten().sort().values)
+
+
+def test_original_download_folder_names_work_without_renaming(tmp_path):
+    """Real downloads are named 'Onera ... - Images' / '- Train Labels' / '- Test Labels'."""
+    raw = tmp_path / "raw"
+    _make_city(raw, "cityA", "train", 280, 280, seed=1)
+    _make_city(raw, "cityB", "test", 260, 260, seed=2)
+    (raw / "images").rename(raw / "Onera Satellite Change Detection dataset - Images")
+    (raw / "train_labels").rename(raw / "Onera Satellite Change Detection dataset - Train Labels")
+    (raw / "test_labels").rename(raw / "Onera Satellite Change Detection dataset - Test Labels")
+    images = raw / "Onera Satellite Change Detection dataset - Images"
+    (images / "train.txt").write_text("cityA")
+    (images / "test.txt").write_text("cityB")
+    assert len(OSCDDataset(raw, "train")) > 0
+    assert OSCDDataset(raw, "test").cities[0].mask.sum() == 30 * 40
+
+
+def test_padding_is_marked_invalid_and_never_counts_as_change(oscd_root):
+    """cityB is 260x260; with tile=300 the bottom/right 40 px are padding (real-data: norcia)."""
+    item = OSCDDataset(oscd_root, "test", tile=300)[0]
+    assert item["valid"].shape == (1, 300, 300)
+    assert item["valid"][0, :260, :260].min() == 1
+    assert item["valid"][0, 260:, :].max() == 0 and item["valid"][0, :, 260:].max() == 0
+    assert (item["mask"] * (1 - item["valid"])).sum() == 0
+    # Fully inside a city: everything valid.
+    assert OSCDDataset(oscd_root, "train", tile=128)[0]["valid"].min() == 1
+
+
+def test_augment_moves_valid_with_the_image(oscd_root):
+    aug = OSCDDataset(oscd_root, "test", tile=300, augment=True)
+    torch.manual_seed(3)
+    for _ in range(6):
+        item = aug[0]
+        assert item["valid"].sum() == 260 * 260  # padding region keeps its size
+        assert (item["img1"].sum(0, keepdim=True) * (1 - item["valid"])).sum() == 0
