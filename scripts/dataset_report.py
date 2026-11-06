@@ -63,7 +63,7 @@ def mask_panel(mask: np.ndarray, color: tuple[int, int, int], valid=None) -> np.
 def report_oscd() -> None:
     print("\n=== OSCD (change detection) ===")
     best = (-1.0, None)
-    for split in ("train", "test"):
+    for split in ("train", "val", "test"):
         ds = OSCDDataset(OSCD_ROOT, split)
         mins, maxs, sums = np.full(4, 9.0), np.full(4, -9.0), np.zeros(4)
         changed = total = tiles_with_change = 0

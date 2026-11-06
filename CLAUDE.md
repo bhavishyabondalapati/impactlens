@@ -28,6 +28,7 @@ An open reimplementation of an aerial impact-intelligence pipeline, built on pub
 ## Hard rules
 
 - **Never commit data, secrets, or `.env`.** Raw data goes in `data/` (gitignored). Real keys live only in `.env`; `.env.example` has placeholders only.
+- **Test splits are for the final number only.** Checkpoint selection and early stopping use validation data (OSCD: 3 held-out train cities `pisa, mumbai, aguasclaras`; Sen1Floods11: its `valid` split). Never look at test or Bolivia metrics while tuning.
 - **No `Co-Authored-By` trailers** in commit messages.
 - Small commits with descriptive messages. Ask before pushing.
 - Nothing about the owner's previous employer anywhere in code, docs, or commits.

@@ -131,3 +131,105 @@ def test_augment_moves_valid_with_the_image(oscd_root):
         item = aug[0]
         assert item["valid"].sum() == 260 * 260  # padding region keeps its size
         assert (item["img1"].sum(0, keepdim=True) * (1 - item["valid"])).sum() == 0
+
+
+# ---- validation cities and random crops -------------------------------------------------
+
+
+@pytest.fixture
+def four_city_root(tmp_path, monkeypatch):
+    """Three train cities (cityC is the held-out validation city) and one test city."""
+    from impactlens.data import oscd
+
+    monkeypatch.setattr(oscd, "VAL_CITIES", ("cityC",))
+    _make_city(tmp_path, "cityA", "train", 400, 380, seed=1)
+    _make_city(tmp_path, "cityB", "train", 300, 300, seed=2)
+    _make_city(tmp_path, "cityC", "train", 320, 310, seed=3)
+    _make_city(tmp_path, "cityD", "test", 260, 260, seed=4)
+    (tmp_path / "images" / "train.txt").write_text("cityA,cityB,cityC")
+    (tmp_path / "images" / "test.txt").write_text("cityD")
+    return tmp_path
+
+
+def _names(ds):
+    return [c.name for c in ds.cities]
+
+
+def test_splits_are_disjoint_and_cover_the_official_train(four_city_root):
+    train = _names(OSCDDataset(four_city_root, "train"))
+    val = _names(OSCDDataset(four_city_root, "val"))
+    test = _names(OSCDDataset(four_city_root, "test"))
+    full = _names(OSCDDataset(four_city_root, "train_all"))
+    assert train == ["cityA", "cityB"] and val == ["cityC"] and test == ["cityD"]
+    assert not set(train) & set(val)
+    assert not (set(train) | set(val)) & set(test)  # test cities never leak into train/val
+    assert sorted(train + val) == sorted(full)
+
+
+def test_real_validation_cities_are_in_the_official_train_split():
+    """Guards the constants: VAL_CITIES must be real OSCD training cities, not test cities."""
+    from impactlens.data.oscd import VAL_CITIES
+
+    official_train = (
+        "aguasclaras bercy bordeaux nantes paris rennes saclay_e abudhabi cupertino pisa "
+        "beihai hongkong beirut mumbai"
+    ).split()
+    official_test = (
+        "brasilia montpellier norcia rio saclay_w valencia dubai lasvegas milano chongqing"
+    ).split()
+    assert set(VAL_CITIES) <= set(official_train) and not set(VAL_CITIES) & set(official_test)
+    assert 2 <= len(VAL_CITIES) <= 3
+
+
+def test_unknown_split_and_missing_val_cities_raise(oscd_root):
+    with pytest.raises(ValueError):
+        OSCDDataset(oscd_root, "validation")
+    with pytest.raises(ValueError):  # the real VAL_CITIES are not in this tiny fake train split
+        OSCDDataset(oscd_root, "val")
+
+
+def test_random_crops_have_epoch_length_and_right_shapes(four_city_root):
+    ds = OSCDDataset(four_city_root, "train", crops_per_epoch=7)
+    assert len(ds) == 7
+    item = ds[0]
+    assert item["img1"].shape == (4, 256, 256) and item["mask"].shape == (1, 256, 256)
+    assert item["valid"].min() == 1  # all train cities are larger than a tile: no padding
+
+
+def test_random_crops_differ_between_epochs_but_are_reproducible_with_a_seed(four_city_root):
+    ds = OSCDDataset(four_city_root, "train", crops_per_epoch=5)
+
+    def epoch():
+        return torch.stack([ds[i]["img1"] for i in range(len(ds))])
+
+    torch.manual_seed(0)
+    first, second = epoch(), epoch()
+    assert not torch.equal(first, second)  # new crops every epoch, not the same fixed tiles
+    torch.manual_seed(0)
+    assert torch.equal(first, epoch())  # ...but deterministic given the seed
+
+
+def test_random_crops_cover_all_train_cities_and_stay_in_bounds(four_city_root):
+    ds = OSCDDataset(four_city_root, "train", crops_per_epoch=200)
+    torch.manual_seed(1)
+    seen = {ds[i]["city"] for i in range(200)}
+    assert seen == {"cityA", "cityB"}
+    for _ in range(50):
+        ci, r, c = ds._random_position()
+        h, w = ds.cities[ci].mask.shape
+        assert 0 <= r <= h - 256 and 0 <= c <= w - 256
+
+
+def test_random_crops_refused_for_val_and_test(four_city_root):
+    for split in ("val", "test"):
+        with pytest.raises(ValueError):
+            OSCDDataset(four_city_root, split, crops_per_epoch=4)
+
+
+def test_random_crops_with_augment_keep_mask_aligned(four_city_root):
+    ds = OSCDDataset(four_city_root, "train", crops_per_epoch=10, augment=True)
+    torch.manual_seed(2)
+    for i in range(10):
+        item = ds[i]
+        assert set(item["mask"].unique().tolist()) <= {0.0, 1.0}
+        assert (item["mask"] * (1 - item["valid"])).sum() == 0
