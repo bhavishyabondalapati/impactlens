@@ -1,0 +1,22 @@
+# Local PostGIS for the Geo-AI rollups:  docker compose up -d   /   docker compose down
+# The password comes from .env (POSTGRES_PASSWORD); see .env.example. Bound to localhost only.
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    platform: linux/amd64  # the official image is amd64-only; Docker Desktop emulates it on Apple Silicon
+    environment:
+      POSTGRES_DB: impactlens
+      POSTGRES_USER: impactlens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U impactlens -d impactlens"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
