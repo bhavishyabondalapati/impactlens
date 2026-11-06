@@ -47,7 +47,12 @@ VAL_CITIES = ("pisa", "mumbai", "aguasclaras")
 SPLITS = ("train", "val", "test", "train_all")
 
 
-def split_cities(official_train: list[str], official_test: list[str], split: str) -> list[str]:
+def split_cities(
+    official_train: list[str],
+    official_test: list[str],
+    split: str,
+    val_cities: tuple[str, ...] | list[str] | None = None,
+) -> list[str]:
     """City names for our four splits.
 
     train      official train minus VAL_CITIES   (what the model learns from)
@@ -55,12 +60,13 @@ def split_cities(official_train: list[str], official_test: list[str], split: str
     test       official test                     (final evaluation ONLY)
     train_all  full official train               (optional final retrain, no validation)
     """
+    held_out = tuple(VAL_CITIES if val_cities is None else val_cities)
     if split == "train":
-        return [c for c in official_train if c not in VAL_CITIES]
+        return [c for c in official_train if c not in held_out]
     if split == "val":
-        val = [c for c in official_train if c in VAL_CITIES]
+        val = [c for c in official_train if c in held_out]
         if not val:
-            raise ValueError(f"none of the validation cities {VAL_CITIES} are in the train split")
+            raise ValueError(f"none of the validation cities {held_out} are in the train split")
         return val
     if split == "test":
         return list(official_test)

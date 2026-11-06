@@ -29,9 +29,7 @@ import csv
 from pathlib import Path
 
 import numpy as np
-import rasterio
 import torch
-from rasterio.windows import Window
 from torch.utils.data import Dataset
 
 from impactlens.data.oscd import tile_starts
@@ -75,6 +73,24 @@ def _chip_paths(root: Path, chip: str) -> tuple[Path, Path]:
     return image, label
 
 
+def read_chip(root: str | Path, chip: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read one whole chip: normalized (4, H, W) float32 image, water uint8, valid uint8."""
+    import rasterio  # lazy: the packed-npz path (Kaggle) does not need rasterio
+
+    image_path, label_path = _chip_paths(Path(root), chip)
+    with rasterio.open(image_path) as src:
+        if src.count != CHIP_BANDS:
+            raise ValueError(f"{image_path} has {src.count} bands, expected {CHIP_BANDS}")
+        dn = src.read(list(S2_BAND_INDEXES))
+    with rasterio.open(label_path) as src:
+        label = src.read(1)
+    return (
+        normalize(dn_to_reflectance(dn)),
+        (label == 1).astype(np.uint8),
+        (label != -1).astype(np.uint8),
+    )
+
+
 def _pad_to(arr: np.ndarray, size: int) -> np.ndarray:
     h, w = arr.shape[-2:]
     if h >= size and w >= size:
@@ -86,9 +102,12 @@ def _pad_to(arr: np.ndarray, size: int) -> np.ndarray:
 class Sen1Floods11Dataset(Dataset):
     """Tiles of Sen1Floods11 hand-labeled chips for water segmentation.
 
+    ``root`` is the raw Sen1Floods11 folder (tiles are read lazily from disk) or a packed
+    ``sen1floods11.npz`` made by scripts/pack_for_kaggle.py (everything held in memory).
+
     Each item is a dict: ``img`` (4, T, T) float32 in [0, 1] (B2,B3,B4,B8, same normalization as
     everything else), ``mask`` (1, T, T) float32 with 1 = water, ``valid`` (1, T, T) float32
-    with 0 where the label is -1 (ignore), and ``chip``. Tiles are read lazily from disk.
+    with 0 where the label is -1 (ignore), and ``chip``.
     """
 
     def __init__(
@@ -103,15 +122,27 @@ class Sen1Floods11Dataset(Dataset):
         self.tile = tile
         self.stride = stride or tile
         self.augment = augment
-        self.chips = read_chip_ids(self.root, split)
+        self._packed = None
+        sizes: list[tuple[int, int]] = []  # (height, width) of every chip
+        if self.root.suffix == ".npz":
+            from impactlens.data.packed import load_sen1floods11_arrays
+
+            self._packed = load_sen1floods11_arrays(self.root, split)
+            self.chips = [str(c) for c in self._packed["ids"]]
+            sizes = [self._packed["mask"].shape[1:]] * len(self.chips)
+        else:
+            import rasterio
+
+            self.chips = read_chip_ids(self.root, split)
+            for chip in self.chips:
+                image, _ = _chip_paths(self.root, chip)
+                with rasterio.open(image) as src:
+                    if src.count != CHIP_BANDS:
+                        raise ValueError(f"{image} has {src.count} bands, expected {CHIP_BANDS}")
+                    sizes.append((src.height, src.width))
         # (chip index, row, col) for every tile. Only file headers are read here.
         self.index: list[tuple[int, int, int]] = []
-        for i, chip in enumerate(self.chips):
-            image, _ = _chip_paths(self.root, chip)
-            with rasterio.open(image) as src:
-                if src.count != CHIP_BANDS:
-                    raise ValueError(f"{image} has {src.count} bands, expected {CHIP_BANDS}")
-                h, w = src.height, src.width
+        for i, (h, w) in enumerate(sizes):
             for r in tile_starts(h, tile, self.stride):
                 for c in tile_starts(w, tile, self.stride):
                     self.index.append((i, r, c))
@@ -119,24 +150,37 @@ class Sen1Floods11Dataset(Dataset):
     def __len__(self) -> int:
         return len(self.index)
 
-    def __getitem__(self, idx: int) -> dict:
-        ci, r, c = self.index[idx]
-        chip = self.chips[ci]
-        image_path, label_path = _chip_paths(self.root, chip)
+    def _read_window(self, ci: int, r: int, c: int):
+        """Normalized image (4,h,w) float32, water (h,w) and valid (h,w) for one window."""
         t = self.tile
-        window = Window(c, r, t, t)  # rasterio clips this at the chip edge
+        if self._packed is not None:
+            from impactlens.data.packed import dequantize
 
+            p = self._packed
+            img = dequantize(p["img"][ci, :, r : r + t, c : c + t])
+            return img, p["mask"][ci, r : r + t, c : c + t], p["valid"][ci, r : r + t, c : c + t]
+
+        import rasterio
+        from rasterio.windows import Window
+
+        image_path, label_path = _chip_paths(self.root, self.chips[ci])
+        window = Window(c, r, t, t)  # rasterio clips this at the chip edge
         with rasterio.open(image_path) as src:
             dn = src.read(list(S2_BAND_INDEXES), window=window)
         with rasterio.open(label_path) as src:
             label = src.read(1, window=window)
+        return normalize(dn_to_reflectance(dn)), label == 1, label != -1
 
-        img = _pad_to(normalize(dn_to_reflectance(dn)), t)
-        water = _pad_to((label == 1).astype(np.float32), t)[None]
-        valid = _pad_to((label != -1).astype(np.float32), t)[None]  # padding counts as invalid
+    def __getitem__(self, idx: int) -> dict:
+        ci, r, c = self.index[idx]
+        t = self.tile
+        img, water, valid = self._read_window(ci, r, c)
+        img = _pad_to(img, t)
+        water = _pad_to(water.astype(np.float32), t)[None]
+        valid = _pad_to(valid.astype(np.float32), t)[None]  # padding counts as invalid
 
         # Stack so every transform hits all three identically: (4 + 1 + 1, T, T).
         x = torch.from_numpy(np.concatenate([img, water, valid], axis=0))
         if self.augment:
             x = random_flip_rotate(x)
-        return {"img": x[:4], "mask": x[4:5], "valid": x[5:6], "chip": chip}
+        return {"img": x[:4], "mask": x[4:5], "valid": x[5:6], "chip": self.chips[ci]}
