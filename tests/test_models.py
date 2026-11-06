@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from impactlens.data import packed
-from impactlens.data.preprocess import BAND_CLIPS
+from impactlens.data.preprocess import FLOOD_BAND_CLIPS
 from impactlens.models import baseline, export, train
 from impactlens.models.losses import bce_dice_loss
 from impactlens.models.metrics import ConfusionMeter
@@ -18,10 +18,10 @@ from impactlens.models.unet import UNet
 
 
 def test_unet_shape_and_size_check():
-    net = UNet(base=4).eval()
-    assert net(torch.rand(2, 4, 32, 48)).shape == (2, 1, 32, 48)
+    net = UNet(in_ch=6, base=4).eval()
+    assert net(torch.rand(2, 6, 32, 48)).shape == (2, 1, 32, 48)
     with pytest.raises(ValueError):
-        net(torch.rand(1, 4, 30, 32))  # not divisible by 16
+        net(torch.rand(1, 6, 30, 32))  # not divisible by 16
 
 
 def test_siamese_shape_and_it_reads_both_images():
@@ -90,17 +90,27 @@ def test_confusion_meter_empty_is_zero_not_nan():
 # ---------------------------------------------------------------------------- baseline
 
 
-def _fake_img(green, nir):
-    """Normalized (1,4,2,2) image whose reflectance in green / nir is the given constant."""
-    img = torch.zeros(1, 4, 2, 2)
-    img[:, 1] = green / BAND_CLIPS[1]
-    img[:, 3] = nir / BAND_CLIPS[3]
+def _fake_img(green, nir, swir=0.0):
+    """Normalized (1,6,2,2) image; reflectance in green / nir / swir16 is the given constant."""
+    img = torch.zeros(1, 6, 2, 2)
+    img[:, 1] = green / FLOOD_BAND_CLIPS[1]
+    img[:, 3] = nir / FLOOD_BAND_CLIPS[3]
+    img[:, 4] = swir / FLOOD_BAND_CLIPS[4]
     return img
 
 
 def test_ndwi_is_positive_for_water_and_negative_for_vegetation():
     assert ndwi_mean(_fake_img(0.10, 0.03)) > 0.4  # water: bright green, dark NIR
     assert ndwi_mean(_fake_img(0.06, 0.40)) < -0.5  # vegetation: bright NIR
+
+
+def test_mndwi_uses_swir_not_nir():
+    # Dark-NIR shadow that is still bright in SWIR: NDWI is fooled (positive), MNDWI is not.
+    shadow = _fake_img(green=0.05, nir=0.02, swir=0.20)
+    assert float(baseline.ndwi(shadow).mean()) > 0.4
+    assert float(baseline.mndwi(shadow).mean()) < -0.5
+    water = _fake_img(green=0.10, nir=0.03, swir=0.02)
+    assert float(baseline.mndwi(water).mean()) > 0.5
 
 
 def ndwi_mean(img):
@@ -120,17 +130,17 @@ def _write_fake_npz(tmp_path):
         arrays[f"{city}__img1"], arrays[f"{city}__img2"] = img(4, 64, 64), img(4, 64, 64)
         arrays[f"{city}__mask"] = (rng.random((64, 64)) > 0.8).astype(np.uint8)
     arrays["meta"] = packed._meta(
-        dataset="oscd", official_train=["a", "b", "c"], official_test=["d"], val_cities=["c"]
+        "oscd", official_train=["a", "b", "c"], official_test=["d"], val_cities=["c"]
     )
     np.savez_compressed(tmp_path / "oscd.npz", **arrays)
 
     arrays = {}
     for split, n in (("train", 4), ("valid", 2), ("test", 2), ("bolivia", 2)):
-        arrays[f"{split}_img"] = img(n, 4, 64, 64)
+        arrays[f"{split}_img"] = img(n, 6, 64, 64)
         arrays[f"{split}_mask"] = (rng.random((n, 64, 64)) > 0.7).astype(np.uint8)
         arrays[f"{split}_valid"] = np.ones((n, 64, 64), np.uint8)
         arrays[f"{split}_ids"] = np.array([f"{split}_{i}" for i in range(n)])
-    arrays["meta"] = packed._meta(dataset="sen1floods11", splits=["train", "valid", "test"])
+    arrays["meta"] = packed._meta("sen1floods11", splits=["train", "valid", "test"])
     np.savez_compressed(tmp_path / "sen1floods11.npz", **arrays)
 
 
@@ -157,8 +167,10 @@ def test_train_floods_end_to_end_with_baseline(tmp_path):
     out, m = _run("floods", tmp_path)
     assert (out / "floods.onnx").exists()
     assert {"test", "bolivia", "val"} <= set(m)
-    for split in ("val", "test", "bolivia"):
-        assert {"fixed", "tuned"} <= set(m["baseline_ndwi"][split])
+    for index in ("baseline_ndwi", "baseline_mndwi"):
+        for split in ("val", "test", "bolivia"):
+            assert {"fixed", "tuned"} <= set(m[index][split])
+    assert m["round"] == 1 and "threshold" not in m  # no tuning unless asked
     assert m["onnx"]["ok"]
 
 
@@ -190,8 +202,46 @@ def test_onnx_matches_pytorch_for_both_models(tmp_path):
     for task in ("oscd", "floods"):
         model = train.build_model(task, 4).eval()
         path = export.export_onnx(model, task, tmp_path / f"{task}.onnx")
-        inputs = [torch.rand(3, 4, 256, 256) for _ in export.input_names(task)]  # batch != 1
+        inputs = [
+            torch.rand(3, export.N_BANDS[task], 256, 256) for _ in export.input_names(task)
+        ]  # batch != 1
         result = export.verify_onnx(model, task, path, inputs)
         assert result["ok"] and result["mask_agreement"] == 1.0
-        small = [torch.rand(2, 4, 64, 96) for _ in inputs]  # other height/width also works
+        small = [
+            torch.rand(2, export.N_BANDS[task], 64, 96) for _ in inputs
+        ]  # other height/width also works
         assert export.verify_onnx(model, task, path, small)["ok"]
+
+
+# ------------------------------------------------------------------ round 2 additions
+
+
+def test_lr_factor_warms_up_then_decays_to_floor():
+    total, warm = 100, 10
+    f = [train.lr_factor(i, total, warm) for i in range(total)]
+    assert f[0] == pytest.approx(0.1) and f[warm - 1] == pytest.approx(1.0)
+    assert f[warm] == pytest.approx(1.0, abs=1e-3)
+    assert all(a >= b for a, b in zip(f[warm:], f[warm + 1 :], strict=False))  # only decreases
+    assert f[-1] == pytest.approx(0.01, abs=2e-3)
+
+
+def test_tune_threshold_picks_the_best_val_cutoff():
+    mask = torch.cat([torch.ones(50), torch.zeros(50)]).view(1, 1, 10, 10)
+    probs = torch.cat([torch.full((50,), 0.30), torch.full((50,), 0.10)]).view(1, 1, 10, 10)
+    valid = torch.ones_like(mask)
+    t = train.tune_threshold(probs, mask, valid)  # 0.5 would miss all water; 0.15-0.25 is perfect
+    assert 0.10 <= t < 0.30
+    assert train.metrics_at(probs, mask, valid, t)["f1"] == 1.0
+    assert train.metrics_at(probs, mask, valid, 0.5)["f1"] == 0.0
+
+
+def test_round_two_run_records_threshold_and_round_note(tmp_path):
+    _, m = _run("floods", tmp_path, "--round", "2", "--tune-threshold", "--schedule", "cosine")
+    assert m["round"] == 2 and m["earlier_round_test_seen"] is True
+    assert "validation" in m["round_note"] and "round-1 test" in m["round_note"]
+    th = m["threshold"]
+    assert th["tuned_on"] == "valid" and 0 < th["value"] < 1
+    assert {"valid", "test", "bolivia"} <= set(th) and "f1" in th["test"]
+    assert "test" in m and m["history"][0]["lr"] > 0  # plain 0.5 numbers are kept apart
+    # cosine: the last epoch's learning rate is far below the first one's
+    assert m["history"][-1]["lr"] < m["history"][0]["lr"]

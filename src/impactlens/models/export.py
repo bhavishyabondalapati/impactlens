@@ -13,6 +13,7 @@ import numpy as np
 import torch
 
 TILE = 256
+N_BANDS = {"oscd": 4, "floods": 6}  # input channels per image
 TOLERANCE = 1e-3  # max allowed |PyTorch logit - ONNX logit|
 
 
@@ -25,7 +26,7 @@ def export_onnx(model: torch.nn.Module, task: str, path: str | Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     names = input_names(task)
     model = model.cpu().eval()
-    dummy = tuple(torch.rand(1, 4, TILE, TILE) for _ in names)
+    dummy = tuple(torch.rand(1, N_BANDS[task], TILE, TILE) for _ in names)
     torch.onnx.export(
         model,
         dummy,
