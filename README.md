@@ -12,3 +12,5 @@ notebooks/                                    Kaggle/Colab training notebooks
 tests/                                        pytest tests
 infra/                                        AWS CDK (Python)
 ```
+
+> Work in progress, building in phases. Current: data pipeline (Phase 2).
