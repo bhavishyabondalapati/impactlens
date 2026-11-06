@@ -2,6 +2,7 @@
 
 import ast
 import json
+import re
 from pathlib import Path
 
 NB = Path(__file__).parent.parent / "notebooks" / "train_kaggle.ipynb"
@@ -31,11 +32,13 @@ def test_every_code_cell_parses():
 
 
 def test_notebook_uses_the_packed_data_and_the_right_install_flags():
-    text = "\n".join(_code_cells())
+    text = re.sub(r"\s+", " ", "\n".join(_code_cells()))  # ruff may re-wrap notebook lines
     assert "--no-deps" in text and "--ignore-requires-python" in text  # don't clobber Kaggle torch
     assert "oscd.npz" in text and "sen1floods11.npz" in text
     assert "github.com/bhavishyabondalapati/impactlens.git" in text
     assert "YOUR_GITHUB_USERNAME" not in text
-    assert "impactlens.models.train" in text and '"oscd", "floods"' in text
-    assert "WORK}/{task}" in text  # outputs go to /kaggle/working
+    assert "impactlens.models.train" in text and '"--task", "floods"' in text
+    assert "--round" in text and "--tune-threshold" in text and "--schedule" in text
+    assert "RUN_OSCD = False" in text
+    assert "WORK}/floods_r2" in text  # outputs go to /kaggle/working
     assert "api_key" not in text.lower() and "kaggle.json" not in text  # no secrets in the notebook

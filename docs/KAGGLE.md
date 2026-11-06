@@ -45,3 +45,17 @@ in Kaggle *Secrets*, never pasted into the notebook).
    (`--task oscd`, then `--task floods`) into `/kaggle/working/oscd` and `/kaggle/working/floods`.
 5. **Save Version** -> *Save & Run All (Commit)* so outputs persist; download them from the
    notebook's **Output** tab into `models/` (gitignored).
+
+## 5. Round 2: update the dataset with the SWIR bands
+
+`sen1floods11.npz` now has 6 bands (blue, green, red, nir, swir16, swir22) and is 327 MB.
+`oscd.npz` is unchanged (still 4 bands), so you only need to replace the floods file. The loader
+refuses the old 4-band file, so a stale upload fails loudly instead of training on wrong data.
+
+1. `uv run python scripts/pack_for_kaggle.py --only floods` (already done in `build/kaggle/`).
+2. kaggle.com -> your `impactlens-packed` dataset -> **New Version** -> upload
+   `build/kaggle/sen1floods11.npz` (remove the old one; keep `oscd.npz`) -> **Create**.
+   CLI alternative: `uv tool run kaggle datasets version -p build/kaggle -m "6-band floods"`
+   (needs `YOUR_KAGGLE_USERNAME` in `dataset-metadata.json` replaced by your username).
+3. Push the repo (the notebook clones it), then in the notebook make sure the input is the
+   *latest* version of the dataset and **Run All**. Output goes to `/kaggle/working/floods_r2`.

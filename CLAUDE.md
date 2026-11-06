@@ -39,7 +39,7 @@ Work **phase by phase and stop for review after each phase**. Do not start the n
 
 1. Scaffold (this repo layout, CLAUDE.md, README stub)
 2. Data: OSCD loader, Sen1Floods11 loader, STAC fetcher, `impactlens fetch` CLI (done). Event: Valencia floods, Oct 2024.
-3. Models: two of them. (a) FC-Siam-diff (Siamese U-Net) trained on OSCD for general change; (b) a plain U-Net trained on Sen1Floods11 for flood water, because OSCD is mostly urban change and would not detect flooded farmland. Training scripts and Kaggle notebook, ONNX export, sliding-window inference, `geo/indices.py` crop stress layer
+3. Models: two of them. (a) FC-Siam-diff (Siamese U-Net) trained on OSCD for general change; (b) a plain U-Net trained on Sen1Floods11 for flood water (6 bands: RGB, NIR, SWIR B11/B12; round 2), because OSCD is mostly urban change and would not detect flooded farmland. Training scripts and Kaggle notebook, ONNX export, sliding-window inference, `geo/indices.py` crop stress layer
 4. Geo-AI: docker-compose PostGIS, polygonize, spatial SQL, summary JSON and GeoJSON
 5. Agents + RAG: FAISS over SOP PDFs, LangGraph graph with 6 agents, Anthropic Haiku, token logging
 6. AWS: Terraform stack, Step Functions flow, Secrets Manager. Write the deploy steps; the owner runs deploy.
