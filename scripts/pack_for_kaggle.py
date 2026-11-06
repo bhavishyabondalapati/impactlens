@@ -1,6 +1,7 @@
 """Pack OSCD + Sen1Floods11 into small .npz files for upload to Kaggle.
 
-    uv run python scripts/pack_for_kaggle.py --kaggle-user YOUR_KAGGLE_USERNAME
+    uv run python scripts/pack_for_kaggle.py              # both files
+    uv run python scripts/pack_for_kaggle.py --only floods  # just sen1floods11.npz
 
 Output (default build/kaggle/, gitignored):
     oscd.npz, sen1floods11.npz, dataset-metadata.json
@@ -68,7 +69,7 @@ def main() -> None:
     p.add_argument("--oscd-root", type=Path, default=Path("data/raw/oscd"))
     p.add_argument("--s1f-root", type=Path, default=Path("data/raw/sen1floods11"))
     p.add_argument("--out", type=Path, default=Path("build/kaggle"))
-    p.add_argument("--kaggle-user", default="YOUR_KAGGLE_USERNAME")
+    p.add_argument("--kaggle-user", default="bhavishya12345678")
     p.add_argument("--slug", default="impactlens-packed", help="Kaggle dataset name")
     p.add_argument("--no-verify", action="store_true")
     p.add_argument(

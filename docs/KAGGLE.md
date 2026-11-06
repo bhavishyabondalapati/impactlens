@@ -8,7 +8,7 @@ notebook.
 
 ```bash
 cd ~/projects/impactlens
-uv run python scripts/pack_for_kaggle.py --kaggle-user YOUR_KAGGLE_USERNAME
+uv run python scripts/pack_for_kaggle.py   # add --kaggle-user NAME if you are not bhavishya12345678
 ```
 
 This writes `build/kaggle/` (gitignored): `oscd.npz`, `sen1floods11.npz`, `dataset-metadata.json`,
@@ -56,6 +56,21 @@ refuses the old 4-band file, so a stale upload fails loudly instead of training 
 2. kaggle.com -> your `impactlens-packed` dataset -> **New Version** -> upload
    `build/kaggle/sen1floods11.npz` (remove the old one; keep `oscd.npz`) -> **Create**.
    CLI alternative: `uv tool run kaggle datasets version -p build/kaggle -m "6-band floods"`
-   (needs `YOUR_KAGGLE_USERNAME` in `dataset-metadata.json` replaced by your username).
 3. Push the repo (the notebook clones it), then in the notebook make sure the input is the
    *latest* version of the dataset and **Run All**. Output goes to `/kaggle/working/floods_r2`.
+
+## 6. From the terminal: `make kaggle-run`
+
+After `kaggle auth login` (once), one command runs a whole round. See `scripts/kaggle_run.sh`:
+
+1. `git push` (asks first), so the notebook clones the current code.
+2. Upload a new dataset version, only if the `.npz` files changed since the last upload (asks
+   first). The hash of the last upload is kept in `build/.kaggle_dataset.sha256`.
+3. `kaggle kernels push -p notebooks` (asks first): uploads `notebooks/train_kaggle.ipynb` as the
+   private kernel `bhavishya12345678/impactlens-train` with GPU, internet and the dataset set
+   in `notebooks/kernel-metadata.json`, and starts a run (uses GPU quota).
+4. Polls `kaggle kernels status` until the run ends.
+5. Downloads the output to `build/models_<timestamp>/` and prints a results table
+   (`scripts/metrics_summary.py`). If the run failed it prints the end of the log instead.
+
+`KAGGLE_YES=1 make kaggle-run` skips the prompts; use it only once you have agreed to all three.
