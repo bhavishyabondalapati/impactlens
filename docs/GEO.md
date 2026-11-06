@@ -42,8 +42,10 @@ Outputs (gitignored, under `data/processed/valencia_albufera/`):
 | NDVI drop on land | 633 |
 
 **Known confound: rice paddies.** Albufera paddies are flooded on purpose in late autumn and
-winter. 40.8% of paddy area was already water on Oct 26 and 69.8% on Nov 10. So most "new water"
-here is probably farming, not the DANA flood (which hit mostly further north and west, on Oct 29).
+winter. 40.8% of paddy area was already water on Oct 26 (three days BEFORE the Oct 29 DANA) and
+69.8% on Nov 10. The DANA floodwater also drained into the Albufera through l'Horta Sud, so the
+extra paddy water can be either cause, and two optical dates cannot tell them apart. That is why
+the paddies are a flagged confound rather than counted as damage or as farming.
 The paddies are reported separately (`rice_paddies` in the summary, `seasonal_flooding_flag` per
 plot), never dropped. The OSCD change model also fires on the paddies (1,941 ha of its change), as
 expected for a model trained on urban change: flooding a field is a big visual change.
