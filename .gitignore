@@ -16,7 +16,7 @@ __pycache__/
 .DS_Store
 
 # Data and model artifacts (never commit)
-data/
+/data/
 *.tif
 *.tiff
 *.onnx
