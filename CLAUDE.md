@@ -9,15 +9,21 @@ An open reimplementation of an aerial impact-intelligence pipeline, built on pub
 3. **Geo-AI rollups**: PostGIS computes acreage, hotspots, and severity per plot.
 4. **Agents**: 6 LangGraph agents (Ingest, Detect, GeoAnalyst, Retriever, Reporter, Validator) write RAG-grounded reports.
 5. **Validation loop**: every number in a report is checked against the geo metrics summary; mismatches go back to the Reporter.
-6. **Deployment**: AWS (S3, SQS, Lambda, Step Functions), defined with CDK in `infra/`.
+6. **Deployment**: AWS (S3, SQS, Lambda, Step Functions), defined with Terraform in `infra/`.
 
 ## Stack and rules
 
-- Python 3.11. Dependencies managed with `uv` (`uv add`, `uv sync`, `uv run`).
+- Python 3.11. Dependencies managed with `uv` (`uv add`, `uv sync`, `uv run`). **This repo uses uv, not conda: it overrides the global conda-per-project rule.** Do not create a conda env here.
 - `src/` layout: package lives in `src/impactlens/{data,models,geo,agents,aws}`.
 - Tests with `pytest` in `tests/`. Lint and format with `ruff`.
 - Mac with Apple Silicon: use the PyTorch `mps` device (or MLX), never CUDA, for local work. Heavy training goes to a free Kaggle/Colab GPU.
 - Keep code simple and commented; the owner is learning and will explain it in interviews.
+
+## AWS
+
+- Infrastructure is **Terraform + Makefile** (no CDK), same pattern as `~/projects/lexintake-aws`: `make deploy` / `make destroy`.
+- AWS profile `sky`, region **us-east-2 only**. us-east-1 is blocked by an SCP.
+- Terraform code lives in `infra/`; build outputs go to `build/` (gitignored).
 
 ## Hard rules
 
@@ -35,7 +41,7 @@ Work **phase by phase and stop for review after each phase**. Do not start the n
 3. Model: FC-Siam-diff, training script and notebook, ONNX export, sliding-window inference, `geo/indices.py` crop stress layer
 4. Geo-AI: docker-compose PostGIS, polygonize, spatial SQL, summary JSON and GeoJSON
 5. Agents + RAG: FAISS over SOP PDFs, LangGraph graph with 6 agents, Anthropic Haiku, token logging
-6. AWS: CDK stack, Step Functions flow, Secrets Manager. Write the deploy steps; the owner runs deploy.
+6. AWS: Terraform stack, Step Functions flow, Secrets Manager. Write the deploy steps; the owner runs deploy.
 7. Eval + README: IoU/F1, validator catch rate, latency, cost per run, mermaid diagram, results
 
 ## Commands

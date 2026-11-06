@@ -26,5 +26,8 @@ __pycache__/
 
 # Notebooks / infra
 .ipynb_checkpoints/
-cdk.out/
+.terraform/
+*.tfstate
+*.tfstate.*
+build/
 node_modules/
