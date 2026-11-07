@@ -1,0 +1,13 @@
+# Lambda image dependencies: inference and reporting only. No PyTorch (training stays on the
+# laptop / Kaggle), no sentence-transformers (ONNX MiniLM instead), no PostGIS client
+# (Shapely rollup instead), no LangGraph (Step Functions orchestrates on AWS).
+# Versions match uv.lock, so the cloud runs the same code paths as the tests.
+numpy==2.4.6
+scipy==1.17.1
+rasterio==1.4.4
+shapely==2.2.0
+pystac-client==0.9.1
+onnxruntime==1.31.1
+faiss-cpu==1.15.1
+tokenizers==0.23.3
+anthropic==2.6.0

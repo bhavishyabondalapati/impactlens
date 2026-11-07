@@ -31,3 +31,6 @@ __pycache__/
 *.tfstate.*
 build/
 node_modules/
+*.tfplan
+*.tfvars
+crash.log

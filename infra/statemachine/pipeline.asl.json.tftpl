@@ -1,0 +1,110 @@
+{
+  "Comment": "ImpactLens: Fetch -> Detect -> GeoAnalyze -> Retrieve -> Report <-> Validate -> Publish | FlagForReview. Any failed step sends the run to the DLQ.",
+  "StartAt": "Fetch",
+  "States": {
+    "Fetch": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${fetch_arn}", "Payload.$": "$" },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        { "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "Next": "Detect"
+    },
+    "Detect": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${detect_arn}", "Payload.$": "$" },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        { "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "Next": "GeoAnalyze"
+    },
+    "GeoAnalyze": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${geo_analyze_arn}", "Payload.$": "$" },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        { "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "Next": "Retrieve"
+    },
+    "Retrieve": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${retrieve_arn}", "Payload.$": "$" },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        { "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "Next": "Report"
+    },
+    "Report": {
+      "Comment": "Claude writes the missing or failed reports. Stops itself before a call could pass the per-run cost cap (status budget_exceeded).",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${report_arn}", "Payload.$": "$" },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        { "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "Next": "WithinBudget"
+    },
+    "WithinBudget": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.status", "StringEquals": "budget_exceeded", "Next": "FlagForReview" }],
+      "Default": "Validate"
+    },
+    "Validate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${validate_arn}", "Payload.$": "$" },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        { "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "Next": "ReportsValid"
+    },
+    "ReportsValid": {
+      "Comment": "attempt counts drafts: 1 first draft + at most ${max_retries} retries, then a person reviews.",
+      "Type": "Choice",
+      "Choices": [
+        { "Variable": "$.valid", "BooleanEquals": true, "Next": "Publish" },
+        { "Variable": "$.attempt", "NumericGreaterThan": ${max_retries}, "Next": "FlagForReview" }
+      ],
+      "Default": "Report"
+    },
+    "Publish": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${finish_arn}", "Payload": { "run_id.$": "$.run_id", "outcome": "published" } },
+      "OutputPath": "$.Payload",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "End": true
+    },
+    "FlagForReview": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${finish_arn}", "Payload": { "run_id.$": "$.run_id", "outcome": "flagged" } },
+      "OutputPath": "$.Payload",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ" }],
+      "End": true
+    },
+    "SendToDLQ": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": { "QueueUrl": "${dlq_url}", "MessageBody.$": "$" },
+      "Next": "Failed"
+    },
+    "Failed": { "Type": "Fail", "Error": "PipelineFailed", "Cause": "A step failed after its retries; the run id and error are in the dead-letter queue." }
+  }
+}

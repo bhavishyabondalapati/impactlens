@@ -1,0 +1,6 @@
+# Allow-list: the image needs only the package source and its requirements file.
+# Everything else (data/, build/, .env, .venv, models) stays out of the build context.
+*
+!src/impactlens/**
+!infra/docker/requirements.txt
+**/__pycache__
