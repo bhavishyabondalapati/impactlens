@@ -1,0 +1,61 @@
+name: CI
+
+# Runs on every push and pull request. No secrets and no AWS: the tests use fakes for the web
+# services and the LLM, and Terraform is only checked (no backend, no plan, no apply).
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    # A throwaway PostGIS database, so the PostGIS rollup tests run here too (and are compared
+    # with the Shapely backend, as on the laptop). The password only protects this container,
+    # which lives for one job and is reachable only from the runner: it is not a secret.
+    services:
+      postgis:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: impactlens
+          POSTGRES_USER: impactlens
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U impactlens -d impactlens"
+          --health-interval 3s --health-timeout 3s --health-retries 30
+    env:
+      POSTGRES_PASSWORD: ci-only-password
+      POSTGRES_PORT: "5433"
+      REQUIRE_POSTGIS: "1"  # fail, rather than skip, if the database is unreachable
+    steps:
+      - uses: actions/checkout@v4
+      # uv installs Python 3.11 and the locked dependencies. On Linux torch comes from the
+      # CPU-only index (pyproject.toml), and the uv cache is keyed on uv.lock.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # Tests that need gitignored data or a real web service are deselected by marker.
+      - run: uv run pytest -m "not needs_data and not network" -rs
+
+  terraform:
+    name: Terraform fmt and validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
