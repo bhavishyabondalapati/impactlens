@@ -42,8 +42,11 @@ validate: init
 	$(TF) validate
 
 # The Lambda image (arm64, no PyTorch). Built locally; nothing leaves the laptop.
+# --provenance/--sbom=false: one plain linux/arm64 manifest. With them, BuildKit adds an
+# attestation manifest and wraps both in a manifest list, which Lambda does not accept.
 image:
-	docker build --platform linux/arm64 -f infra/docker/Dockerfile -t $(IMAGE):latest .
+	docker build --platform linux/arm64 --provenance=false --sbom=false \
+	  -f infra/docker/Dockerfile -t $(IMAGE):latest .
 
 # Deploy step 1: the ECR repository must exist before an image can be pushed to it.
 ecr: init
