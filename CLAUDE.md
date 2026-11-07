@@ -55,4 +55,6 @@ uv run ruff format .    # format
 docker compose up -d    # local PostGIS for Phase 4 (password in .env)
 uv run impactlens infer --quicklook docs/images/valencia_quicklook.png
 uv run impactlens rollup --map docs/images/valencia_rollup.png --ndvi-map docs/images/valencia_ndvi_drop.png
+uv run impactlens sops    # SOP corpus -> FAISS index (Phase 5)
+uv run impactlens report  # 6-agent graph -> 3 validated reports (needs ANTHROPIC_API_KEY in .env)
 ```
