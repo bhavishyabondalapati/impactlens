@@ -11,12 +11,17 @@ Three checks per report:
   (c) citations: every sentence of the Method section (8+ words) cites an SOP chunk like [S3]
       or is tagged [project] (our own design choice), and every cited id exists. Whether the
       cited excerpt really supports the sentence is NOT checked (see docs/AGENTS.md).
+  (d) rankings: towns listed as a ranking (numbered list, or "highest", "worst", "top" ...)
+      must be in the order of the fact-sheet metric the list quotes.
+  (e) overclaims: "confirmed", "proven", "definitely", "certainly" are rejected in sentences
+      about NDVI drop, vegetation loss, mud or paddy water, unless negated or conditional.
 """
 
 from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 
 CAVEATS = {
@@ -188,6 +193,151 @@ def check_citations(report: str, n_chunks: int) -> list[str]:
     return errors
 
 
+# ------------------------------------------------------------------- (d) ranking order
+
+
+RANK_WORDS = re.compile(
+    r"\b(highest|worst|most|largest|biggest|greatest|top|rank(ed|ing)?|lowest|least|smallest)\b",
+    re.IGNORECASE,
+)
+ASCENDING_WORDS = re.compile(r"\b(lowest|least|smallest)\b", re.IGNORECASE)
+LIST_ITEM = re.compile(r"^\s*([-*+]|(\d+)[.)])\s+(.*)$")
+
+
+def _plain(text: str) -> str:
+    """Lowercase without accents, so 'Sedavi' and 'Valencia' match 'Sedaví' and 'València'."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).lower()
+
+
+def town_metrics(facts: dict) -> dict[str, dict[str, float]]:
+    """Every per-town number in the fact sheet, as {metric: {town: value}}."""
+    veg = facts.get("vegetation_loss_likely_mud", {})
+    metrics = {
+        "NDVI-drop rate (% of vegetated land)": veg.get("pct_of_vegetated_land_by_town", {}),
+        "NDVI-drop hectares": veg.get("by_town", {}),
+        "urban change hectares": facts.get("urban_change", {}).get("by_town", {}),
+    }
+    for row in facts.get("by_town", []):
+        for key, value in row.items():
+            if key != "name" and isinstance(value, int | float):
+                metrics.setdefault(key, {})[row["name"]] = value
+    return {m: v for m, v in metrics.items() if v}
+
+
+@dataclass
+class RankedList:
+    lead: str  # the heading / sentence / table header just before the list
+    numbered: bool
+    items: list[str]
+
+
+def ranked_lists(report: str) -> list[RankedList]:
+    """Markdown lists and tables, each with the line that introduces it. Wrapped lines join
+    their item; blank lines between items do not end the list."""
+    lists, lead, current = [], "", None
+    for line in report.splitlines():
+        s = line.strip()
+        item = LIST_ITEM.match(line)
+        is_row = s.startswith("|") and not re.fullmatch(r"[|:\-\s]+", s)
+        if item or is_row:
+            if current is None:
+                current = RankedList(lead, bool(item and item.group(2)), [])
+                lists.append(current)
+                if is_row:  # the first table row is its header: it counts as the lead
+                    current.lead += " " + s
+                    continue
+            current.items.append(item.group(3) if item else s)
+        elif re.fullmatch(r"[|:\-\s]+", s or "x"):
+            continue  # table separator row
+        elif not s:
+            continue  # a blank line inside a list does not end it
+        elif current is not None and line[:1].isspace():
+            current.items[-1] += " " + s  # wrapped line of the last item
+        else:
+            current, lead = None, s
+    return lists
+
+
+def check_rankings(report: str, facts: dict) -> list[str]:
+    """If towns are listed as a ranking (numbered, or introduced by 'highest', 'worst',
+    'top', ...), their order must be the order of some per-town metric in the fact sheet:
+    the metric whose values the items quote, or any metric if they quote none."""
+    metrics = town_metrics(facts)
+    towns = {_plain(t): t for m in metrics.values() for t in m}
+    errors = []
+    for rl in ranked_lists(report):
+        if not (rl.numbered or RANK_WORDS.search(rl.lead)):
+            continue
+        rows = []  # (town, item text)
+        grouped = False  # an item naming several towns: a to-do list, not a ranking
+        for text in rl.items:
+            named = {t for k, t in towns.items()
+                     if re.search(rf"(?<!\w){re.escape(k)}(?!\w)", _plain(text))}  # fmt: skip
+            grouped |= len(named) > 1
+            if len(named) == 1:
+                rows.append((named.pop(), text))
+        names = [t for t, _ in rows]
+        if grouped or len(rows) < 2 or len(set(names)) < len(names):
+            continue
+        # metrics that every item quotes (its number for that town is in the item)
+        quoted = [m for m, vals in metrics.items()
+                  if all(t in vals and matches_any(numbers_in(x), vals[t])
+                         for t, x in rows)]  # fmt: skip
+        candidates = quoted or [m for m, vals in metrics.items() if all(t in vals for t, _ in rows)]
+        descending = not ASCENDING_WORDS.search(rl.lead)
+        if not candidates or any(_in_order([metrics[m][t] for t, _ in rows], descending)
+                                 for m in candidates):  # fmt: skip
+            continue
+        m = candidates[0]
+        expected = sorted((t for t, _ in rows), key=lambda t: metrics[m][t], reverse=descending)
+        written = ", ".join(t for t, _ in rows)
+        errors.append(f"ranking out of order under '{rl.lead[:60]}': you listed {written}, but "
+                      f"by {m} the fact sheet order is {', '.join(expected)}. List them in "
+                      "that order (or drop the ranking wording)")  # fmt: skip
+    return errors
+
+
+def matches_any(found: list[Found], value: float) -> bool:
+    return any(matches(f, [value]) for f in found)
+
+
+def _in_order(values: list[float], descending: bool) -> bool:
+    pairs = zip(values, values[1:], strict=False)
+    return all(a >= b if descending else a <= b for a, b in pairs)
+
+
+# --------------------------------------------------------------------- (e) overclaims
+
+
+PROXY_TOPIC = re.compile(r"ndvi|vegetation[- ]?(loss|drop|damage)|loss of vegetation|\bmud"
+                         r"|padd(y|ies)|\brice\b", re.IGNORECASE)  # fmt: skip
+OVERCLAIM = re.compile(r"\b(confirmed|proven|definitely|certainly)\b", re.IGNORECASE)
+# "cannot be confirmed", "before damage can be confirmed", "not proven" are honest, not claims
+HEDGE = re.compile(r"\b(not|no|never|cannot|can't|nor|without|before|until|unless|can|could"
+                   r"|must|should|would|need|needs|needed|requires?|required|to)\b",
+                   re.IGNORECASE)  # fmt: skip
+
+
+def check_overclaims(report: str) -> list[str]:
+    """NDVI drop and paddy water are proxies. In a sentence about them, 'confirmed', 'proven',
+    'definitely' or 'certainly' is an overclaim, unless it is negated or conditional within
+    the four words before it ('cannot be confirmed', 'must be confirmed in the field')."""
+    errors = []
+    for block in units(report):
+        for sentence in sentences(block):
+            if not PROXY_TOPIC.search(sentence):
+                continue
+            for m in OVERCLAIM.finditer(sentence):
+                before = sentence[: m.start()].split()[-4:]
+                if not any(HEDGE.fullmatch(w.strip(".,;:()*")) for w in before):
+                    errors.append(f"overclaim {m.group(0)!r} in: '{sentence.strip()}'. NDVI drop "
+                                  "and paddy water are proxies, not proof; write 'indicates' or "
+                                  "'suggests' instead")  # fmt: skip
+    return errors
+
+
 def validate(report: str, facts: dict, n_chunks: int) -> list[str]:
     return (check_numbers(report, facts) + check_caveats(report)
-            + check_citations(report, n_chunks))  # fmt: skip
+            + check_citations(report, n_chunks) + check_rankings(report, facts)
+            + check_overclaims(report))  # fmt: skip

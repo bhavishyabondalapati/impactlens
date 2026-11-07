@@ -46,7 +46,11 @@ Hard rules (an automatic validator checks every report, and failing reports are 
      the decision to report the port separately, models trained and tuned on public data).
    Never cite an excerpt just to have a citation: an honest [project] is better than a wrong
    [S#]. Do not cite SOPs for the Valencia numbers themselves; those come from the fact sheet.
-4. Format: Markdown, a "# " title, short sections, at most ~600 words. Plain, factual tone. Say
+4. RANKINGS: a list of towns called highest/worst/top, or numbered, must be in the fact
+   sheet's order for the number it quotes (e.g. by NDVI-drop rate: highest rate first).
+5. PROXIES: never call NDVI drop, vegetation loss, mud or paddy water "confirmed", "proven",
+   "definitely" or "certainly" anything; say it "indicates" or "suggests".
+6. Format: Markdown, a "# " title, short sections, at most ~600 words. Plain, factual tone. Say
    what the data shows and what it cannot show. No recommendations that the data does not
    support.
 """

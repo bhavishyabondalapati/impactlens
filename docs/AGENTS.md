@@ -19,7 +19,7 @@ flowchart LR
     D --> G[GeoAnalyst<br/>PostGIS rollup<br/>-> fact sheet]
     G --> R[Retriever<br/>FAISS over SOPs]
     R --> W[Reporter<br/>Claude Haiku 4.5<br/>3 reports]
-    W --> V{Validator<br/>numbers, caveats,<br/>citations}
+    W --> V{Validator<br/>numbers, caveats, citations,<br/>rankings, overclaims}
     V -- all pass --> OK[validated]
     V -- errors, retries left --> W
     V -- still failing after 2 retries --> H[flagged for<br/>human review]
@@ -66,24 +66,41 @@ Validator is regex + arithmetic, unit-tested with a fake LLM (`tests/test_agents
    pushed the model to cite an unrelated excerpt for our own steps. A citation written after
    the full stop ("... the date. [S1]") counts for the sentence right before it, and only that
    one.
+4. **Ranking order.** When towns are listed as a ranking (a numbered list, or a list or table
+   introduced by "highest", "worst", "top", "largest", "ranked" ...), their order must follow
+   a per-town metric in the fact sheet: the metric whose values the items quote (rate,
+   NDVI-drop hectares, urban change ...), descending, or ascending after "lowest"/"least".
+   Town names match without accents ("Sedavi" = "Sedaví"). Lists whose items name several
+   towns at once (a to-do list) are not rankings and are skipped.
+5. **Overclaims.** In a sentence about NDVI drop, vegetation loss, mud or paddy water,
+   "confirmed", "proven", "definitely" and "certainly" are rejected, unless one of the four
+   words before is a negation or condition ("cannot be confirmed", "must be confirmed in the
+   field").
+
+Both were added after the second live run passed with these two errors: the emergency
+report's "highest rate" list put Alfafar (36.8%) above Sedaví (40.5%), and the agriculture
+report called NDVI drop "confirmed vegetation loss" a few sections after its own proxy
+caveat. Run over the six live reports, checks 4 and 5 find exactly 5 problems, all real (3
+out-of-order rankings, 2 "confirmed").
+
+**Known limits: what is still not caught.**
+- **Citation relevance.** The Validator checks that `[S4]` exists, not that excerpt S4
+  actually supports the sentence. The prompt says to use `[project]` instead of borrowing an
+  excerpt, but only a reader (or a future check such as embedding similarity between
+  sentence and excerpt) can confirm relevance.
+- **Unlabelled order.** A list introduced by "By urban change:" has no ranking word, so its
+  order is not checked, although a reader may take it as a ranking.
+- **Other overclaim words.** Only the four words above. "Clearly mud", "shows that the crop
+  was destroyed" or "damaged" used for NDVI drop pass.
+- **Meaning in general.** The checks are word and number patterns. A report can be
+  misleading in ways no pattern catches (emphasis, a wrong comparison between true numbers),
+  so a human still reads each report before it goes out.
 
 On failure the errors go back to the Reporter word for word (for example: "number '2,350'
 (in: ...) does not match any value in the fact sheet"). After 2 retries a still-failing report
 is saved with a **FLAGGED FOR HUMAN REVIEW** banner and `run.json` status
 `needs_human_review`. `run.json` keeps the errors from every attempt (`validation_history`)
 and how many drafts each report needed (`attempts_per_report`).
-
-**Known limit: citation relevance is not checked.** The Validator checks that `[S4]` exists,
-not that excerpt S4 actually supports the sentence. A model can still attach a real but
-unrelated excerpt. The prompt tells it to use `[project]` instead, but only a reader (or a
-future check, e.g. embedding similarity between sentence and excerpt, or an LLM judge spot
-check) can confirm relevance.
-
-**Known limit: meaning is not checked.** The Validator checks each number and the caveat
-wording, not what the sentence claims. The second live run passed although the emergency
-report's "highest rate" list put Alfafar (36.8%) above Sedaví (40.5%), and the agriculture
-report called NDVI drop "confirmed vegetation loss" a few sections after its own proxy
-caveat. Both need a human read before a report goes out.
 
 **Bug found in the first live run.** The agriculture report failed with the same 8 errors on
 all 3 attempts. Each Method bullet did cite an SOP, but after the full stop, and the sentence

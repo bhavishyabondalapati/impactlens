@@ -162,6 +162,85 @@ def test_reporter_prompt_offers_project_tag_and_forbids_borrowed_citations():
     assert "land-use priority order" in system
 
 
+# Real Valencia values. Rate: Paiporta 41.6%, Sedaví 40.5%, Alfafar 36.8%;
+# hectares: Paiporta 69.4, Alfafar 57.8, Sedaví 22.2
+def _town(name, ha, pct):
+    return {"name": name, "vegetated_ha_outside_rice_paddies": round(ha * 100 / pct, 1),
+            "ndvi_drop_ha_outside_rice_paddies": ha, "ndvi_drop_pct_of_vegetated": pct}  # fmt: skip
+
+
+RANK_FACTS = build_facts(
+    {
+        **SUMMARY,
+        "by_town": [
+            _town("Paiporta", 69.4, 41.6),
+            _town("Alfafar", 57.8, 36.8),
+            _town("Sedaví", 22.2, 40.5),
+        ],
+    },  # fmt: skip
+)
+RATE_RIGHT = """Towns with the highest NDVI-drop rate:
+- **Paiporta:** 41.6% of vegetated land
+- **Sedaví:** 40.5%
+- **Alfafar:** 36.8%
+"""
+
+
+def test_ranking_in_fact_sheet_order_passes():
+    assert validator.check_rankings(RATE_RIGHT, RANK_FACTS) == []
+    by_ha = "Largest NDVI drop:\n1. Paiporta, 69 ha\n2. Alfafar, 58 ha\n3. Sedavi, 22 ha\n"
+    assert validator.check_rankings(by_ha, RANK_FACTS) == []  # 'Sedavi' matches 'Sedaví'
+
+
+def test_ranking_out_of_order_is_caught():
+    # the live-run error: Alfafar (36.8%) listed above Sedaví (40.5%)
+    wrong = RATE_RIGHT.replace("- **Sedaví:** 40.5%\n- **Alfafar:** 36.8%",
+                               "- **Alfafar:** 36.8%\n- **Sedaví:** 40.5%")  # fmt: skip
+    errors = validator.check_rankings(wrong, RANK_FACTS)
+    assert len(errors) == 1 and "Paiporta, Sedaví, Alfafar" in errors[0]
+    numbered = "1. Alfafar\n2. Paiporta\n"  # numbered = ranking, even without numbers
+    assert validator.check_rankings(numbered, RANK_FACTS)
+    lowest = "Lowest NDVI-drop rate:\n- Paiporta: 41.6%\n- Sedaví: 40.5%\n"
+    assert validator.check_rankings(lowest, RANK_FACTS)  # 'lowest' means ascending
+
+
+def test_ranking_check_also_reads_tables():
+    table = ("| Town (highest rate first) | NDVI drop |\n|---|---|\n"
+             "| Alfafar | 36.8% |\n| Paiporta | 41.6% |\n")  # fmt: skip
+    assert validator.check_rankings(table, RANK_FACTS)
+
+
+def test_lists_that_are_not_rankings_are_left_alone():
+    plain = "Towns in the area:\n- Alfafar: 36.8%\n- Paiporta: 41.6%\n"  # no ranking words
+    todo = "1. **Paiporta and Alfafar:** visit first.\n2. **Catarroja:** check paddies.\n"
+    assert validator.check_rankings(plain, RANK_FACTS) == []
+    assert validator.check_rankings(todo, RANK_FACTS) == []  # items naming several towns
+
+
+@pytest.mark.parametrize("sentence", [
+    "- Confirmed vegetation loss outside rice paddies: 69 ha farmland.",
+    "The NDVI drop in Paiporta is definitely mud.",
+    "Paddy water has been proven to be flood water.",
+    "Vegetation loss certainly reflects flood damage.",
+])  # fmt: skip
+def test_overclaims_about_proxies_are_caught(sentence):
+    assert validator.check_overclaims(sentence)
+
+
+@pytest.mark.parametrize("sentence", [
+    "NDVI drop is a proxy for mud; it is not confirmed damage.",
+    "Mud cover cannot be proven from two optical images.",
+    "Field visits are needed before vegetation loss can be confirmed.",
+    "The urban change in Paiporta was confirmed by local news.",  # not a proxy topic
+])  # fmt: skip
+def test_hedged_or_unrelated_sentences_pass(sentence):
+    assert validator.check_overclaims(sentence) == []
+
+
+def test_good_report_still_passes_all_five_checks():
+    assert validator.validate(GOOD, FACTS, n_chunks=2) == []
+
+
 def test_facts_dates_and_days_after_event():
     ev = FACTS["event"]
     assert ev["before_image_date"] == "2024-10-26" and ev["after_image_date"] == "2024-11-10"
