@@ -38,3 +38,28 @@ variable "max_retries" {
   type        = number
   default     = 2
 }
+
+variable "lambda_memory_mb" {
+  description = "Memory per Lambda in MB (it also sets the CPU share). This account's limit is 3,008 MB per function."
+  type        = map(number)
+  default = {
+    start       = 256
+    fetch       = 2048
+    detect      = 3008 # the ONNX models: as much CPU as the account allows
+    geo_analyze = 3008
+    retrieve    = 2048
+    report      = 512
+    validate    = 512
+    finish      = 512
+  }
+
+  validation {
+    condition     = alltrue([for m in values(var.lambda_memory_mb) : m >= 128 && m <= 3008])
+    error_message = "Each Lambda's memory must be 128-3008 MB: this account's limit is 3,008 MB (a higher value fails at deploy)."
+  }
+
+  validation {
+    condition     = length(setsubtract(["start", "fetch", "detect", "geo_analyze", "retrieve", "report", "validate", "finish"], keys(var.lambda_memory_mb))) == 0
+    error_message = "lambda_memory_mb needs an entry for every function."
+  }
+}

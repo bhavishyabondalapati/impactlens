@@ -2,18 +2,19 @@
 # image (ecr.tf), arm64 (Graviton: ~20% cheaper per second than x86, and the Mac builds it
 # natively). Each function runs one handler from src/impactlens/aws/handlers.py.
 #
-# Memory also sets the CPU share (1,769 MB = 1 vCPU), so the ONNX-heavy Detect step gets more.
+# Memory also sets the CPU share (1,769 MB = 1 vCPU). This account allows at most 3,008 MB per
+# function; var.lambda_memory_mb (variables.tf) enforces that before anything is created.
 
 locals {
-  # The seven workflow steps. name = memory (MB), timeout (s), /tmp size (MB)
+  # The seven workflow steps. name = timeout (s), /tmp size (MB); memory is var.lambda_memory_mb
   functions = {
-    fetch       = { memory = 2048, timeout = 600, tmp = 2048 }
-    detect      = { memory = 6144, timeout = 900, tmp = 2048 }
-    geo_analyze = { memory = 3008, timeout = 600, tmp = 2048 }
-    retrieve    = { memory = 2048, timeout = 120, tmp = 1024 }
-    report      = { memory = 512, timeout = 600, tmp = 512 }
-    validate    = { memory = 512, timeout = 60, tmp = 512 }
-    finish      = { memory = 512, timeout = 60, tmp = 512 }
+    fetch       = { timeout = 600, tmp = 2048 }
+    detect      = { timeout = 900, tmp = 2048 }
+    geo_analyze = { timeout = 600, tmp = 2048 }
+    retrieve    = { timeout = 120, tmp = 1024 }
+    report      = { timeout = 600, tmp = 512 }
+    validate    = { timeout = 60, tmp = 512 }
+    finish      = { timeout = 60, tmp = 512 }
   }
   # every function (the 7 steps + the starter) gets its own IAM role (iam.tf)
   roles = toset(concat(keys(local.functions), ["start"]))
@@ -33,7 +34,7 @@ resource "aws_lambda_function" "step" {
   package_type  = "Image"
   image_uri     = var.image_uri
   architectures = ["arm64"]
-  memory_size   = each.value.memory
+  memory_size   = var.lambda_memory_mb[each.key]
   timeout       = each.value.timeout
 
   ephemeral_storage {
@@ -73,7 +74,7 @@ resource "aws_lambda_function" "start" {
   package_type  = "Image"
   image_uri     = var.image_uri
   architectures = ["arm64"]
-  memory_size   = 256
+  memory_size   = var.lambda_memory_mb["start"]
   timeout       = 30
 
   image_config {

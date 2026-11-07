@@ -38,7 +38,7 @@ flowchart LR
 | bucket | S3 (private) | `requests/ models/ index/ osm/ layers/ reports/`. Public access blocked, ACLs off, HTTPS only, encrypted. `layers/` expires after 30 days. |
 | trigger | S3 event -> SQS -> `start` Lambda | the file name (`requests/<run_id>.json`) becomes the execution name, so one file starts one run |
 | workflow | Step Functions (Standard) | `infra/statemachine/pipeline.asl.json.tftpl`. Retries AWS hiccups; the Report <-> Validate loop runs at most 2 retries |
-| steps | 7 Lambdas, one container image (ECR, arm64) | each runs one function of `src/impactlens/aws/handlers.py` |
+| steps | 7 Lambdas, one container image (ECR, arm64) | each runs one function of `src/impactlens/aws/handlers.py`. At most 3,008 MB memory each (account limit, see below) |
 | failures | SQS dead-letter queue | gets the run id and error of any failed run, and requests the starter could not start |
 | Anthropic key | SSM Parameter Store, SecureString | set by you (`make set-key`); Terraform only creates a placeholder and ignores its value, so the key is never in code or state |
 
@@ -89,6 +89,15 @@ same functions in `agents/steps.py` (retrieve, write reports, check reports, sav
 The retry loop, the validator and the cost cap are therefore identical. On AWS each step is a
 new process, so the Report Lambda reads the run's spend so far back from
 `reports/<run_id>/work/tokens.jsonl`, and the **$0.10 cap holds per run**, not per Lambda.
+
+### Account limit: 3,008 MB per Lambda
+
+This account allows at most 3,008 MB of memory per function. The first deploy failed
+because Detect asked for 6,144 MB. Memory is now set per function in
+`var.lambda_memory_mb` (`infra/variables.tf`). Its validation rejects any value above
+3,008 MB at `terraform plan`, before anything is created. Detect and GeoAnalyze use the
+maximum, which gives about 1.7 vCPU. Detect's 900 s timeout leaves plenty of room: it took
+12 s in the image on the laptop.
 
 ## Request format
 
@@ -151,7 +160,7 @@ There is no database and no always-on compute.
 
 | item | per run |
 |---|---|
-| Lambda (arm64), about 650-950 GB-seconds, mostly Detect | about $0.01 (free tier: 400,000 GB-s a month) |
+| Lambda (arm64), about 500-800 GB-seconds, mostly Detect and GeoAnalyze | about $0.01 (free tier: 400,000 GB-s a month) |
 | Step Functions, 15-20 state transitions | about $0.0005 |
 | Claude Haiku 4.5: 3 reports with caching, plus any retries; hard cap $0.10 | $0.02-0.05 |
 
