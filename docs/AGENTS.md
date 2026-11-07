@@ -55,13 +55,41 @@ Validator is regex + arithmetic, unit-tested with a fake LLM (`tests/test_agents
    - NDVI drop is a proxy for mud, not proof (NDVI + proxy/not proof)
    - AOI coverage limits (AOI/coverage + outside/does not cover/partial)
    - port change excluded (port + excluded/separate)
-3. **Citations.** A `## Method` section is required. Each of its sentences (8+ words) must cite
-   an SOP excerpt `[S#]`, and every cited id must exist.
+3. **Citations.** A `## Method` section is required. Each of its sentences (8+ words) must end
+   with a source tag, and every cited id must exist. The tag is either:
+   - `[S#]`: an SOP excerpt that describes the step (published methodology), or
+   - `[project]`: our own design choice that no guidance describes (the land-use priority
+     order, the NDVI and change thresholds, per-town rates, reporting the port separately).
+
+   So each report separates what comes from published methodology from what was our own
+   engineering choice. Before `[project]` existed, every sentence needed an `[S#]`, which
+   pushed the model to cite an unrelated excerpt for our own steps. A citation written after
+   the full stop ("... the date. [S1]") counts for the sentence right before it, and only that
+   one.
 
 On failure the errors go back to the Reporter word for word (for example: "number '2,350'
 (in: ...) does not match any value in the fact sheet"). After 2 retries a still-failing report
 is saved with a **FLAGGED FOR HUMAN REVIEW** banner and `run.json` status
-`needs_human_review`.
+`needs_human_review`. `run.json` keeps the errors from every attempt (`validation_history`)
+and how many drafts each report needed (`attempts_per_report`).
+
+**Known limit: citation relevance is not checked.** The Validator checks that `[S4]` exists,
+not that excerpt S4 actually supports the sentence. A model can still attach a real but
+unrelated excerpt. The prompt tells it to use `[project]` instead, but only a reader (or a
+future check, e.g. embedding similarity between sentence and excerpt, or an LLM judge spot
+check) can confirm relevance.
+
+**Known limit: meaning is not checked.** The Validator checks each number and the caveat
+wording, not what the sentence claims. The second live run passed although the emergency
+report's "highest rate" list put Alfafar (36.8%) above Sedaví (40.5%), and the agriculture
+report called NDVI drop "confirmed vegetation loss" a few sections after its own proxy
+caveat. Both need a human read before a report goes out.
+
+**Bug found in the first live run.** The agriculture report failed with the same 8 errors on
+all 3 attempts. Each Method bullet did cite an SOP, but after the full stop, and the sentence
+splitter cut the citation off. The error said "add [S#]" to sentences that had one, so the
+model could not fix it. Identical error counts across retries were the clue: a model that is
+just sloppy makes different mistakes each time.
 
 ## Cost control
 

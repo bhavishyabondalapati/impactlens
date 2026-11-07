@@ -8,8 +8,9 @@ Three checks per report:
       bare integers 0-10 are allowed as ordinary counting words ("3 reports").
   (b) caveats: each required caveat must appear, i.e. its key ideas must co-occur in one
       paragraph or bullet (e.g. "paddy" + "seasonal" + "ambiguous").
-  (c) citations: every sentence of the Method section (8+ words) cites an SOP chunk like [S3],
-      and every cited id exists.
+  (c) citations: every sentence of the Method section (8+ words) cites an SOP chunk like [S3]
+      or is tagged [project] (our own design choice), and every cited id exists. Whether the
+      cited excerpt really supports the sentence is NOT checked (see docs/AGENTS.md).
 """
 
 from __future__ import annotations
@@ -44,6 +45,12 @@ CAVEATS = {
 UNIT = r"\s*(%|percent\b|ha\b|hectares?\b|km\b|m\b|days?\b|towns?\b|scenes?\b)"
 NUMBER = re.compile(r"(?<![\w.\-/])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?![\w.]\d|[A-Za-z])")
 CITATION = re.compile(r"\[(S\d+(?:\s*,\s*S\d+)*)\]")
+# A Method sentence is backed either by an SOP excerpt [S#] or by [project]: "this step is our
+# own design choice (e.g. the land-use priority order), not something the guidance says".
+# [project] keeps the model from borrowing an unrelated SOP just to satisfy the rule.
+SOURCE_TAG = re.compile(r"\[(?:S\d+(?:\s*,\s*S\d+)*|project)\]", re.IGNORECASE)
+# Tags at the very start of a piece, e.g. the "[S1]" left over from "... the date. [S1] Next"
+LEADING_TAGS = re.compile(r"^(\s*\[(?:S\d+(?:\s*,\s*S\d+)*|project)\][\s,.;]*)+", re.IGNORECASE)
 
 
 @dataclass
@@ -137,7 +144,18 @@ def units(report: str) -> list[str]:
 
 
 def sentences(block: str) -> list[str]:
-    return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z(\[])", block) if s.strip()]
+    """Split a paragraph into sentences. A citation written after the full stop ("... the
+    date. [S1]") lands at the start of the next piece; it is moved back onto the sentence right
+    before it, and only that one sentence (it cannot cover two uncited sentences)."""
+    out = []
+    for piece in re.split(r"(?<=[.!?])\s+(?=[A-Z(\[])", block):
+        tags = LEADING_TAGS.match(piece)
+        if out and tags:
+            out[-1] = f"{out[-1]} {tags.group(0).strip()}"
+            piece = piece[tags.end() :]
+        if piece.strip():
+            out.append(piece)
+    return out
 
 
 def check_caveats(report: str, required=tuple(CAVEATS)) -> list[str]:
@@ -161,9 +179,12 @@ def check_citations(report: str, n_chunks: int) -> list[str]:
         return errors + ["no '## Method' section: describe the method and cite the SOPs there"]
     for block in units(method.group(1)):
         for sentence in sentences(block):
-            if len(sentence.split()) >= 8 and not CITATION.search(sentence):
-                errors.append(f"method claim without an SOP citation: '{sentence[:80]}...'; "
-                              "add [S#]")  # fmt: skip
+            if len(sentence.split()) >= 8 and not SOURCE_TAG.search(sentence):
+                errors.append(
+                    f"method sentence without a citation: '{sentence.strip()}'. End it, before "
+                    "the full stop, with [S#] if an SOP excerpt supports it, or [project] if it "
+                    "is our own design choice"
+                )
     return errors
 
 

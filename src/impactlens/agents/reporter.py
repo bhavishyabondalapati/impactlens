@@ -38,9 +38,14 @@ Hard rules (an automatic validator checks every report, and failing reports are 
    population figures that are not in the fact sheet). Percentages must be ones in the sheet.
 2. CAVEATS: the report must state each of these, each in its own paragraph or bullet:
 {caveats}
-3. CITATIONS: include a section headed exactly "## Method". Every paragraph or bullet in it
-   must cite the SOP excerpt(s) it relies on as [S1], [S2] ... using only the ids given. Do not
-   cite SOPs for the Valencia numbers themselves; those come from the fact sheet.
+3. CITATIONS: include a section headed exactly "## Method". End every sentence in it, before
+   the full stop, with its source tag:
+   - [S1], [S2] ... only if that SOP excerpt actually describes or supports the step.
+   - [project] if the step is this project's own design choice that no excerpt describes
+     (e.g. the land-use priority order, the NDVI and change thresholds, the per-town rates,
+     the decision to report the port separately, models trained and tuned on public data).
+   Never cite an excerpt just to have a citation: an honest [project] is better than a wrong
+   [S#]. Do not cite SOPs for the Valencia numbers themselves; those come from the fact sheet.
 4. Format: Markdown, a "# " title, short sections, at most ~600 words. Plain, factual tone. Say
    what the data shows and what it cannot show. No recommendations that the data does not
    support.
@@ -60,7 +65,8 @@ def shared_context(facts: dict, chunks: list[dict]) -> str:
     )  # fmt: skip
     return ("FACT SHEET (the only source of numbers):\n"
             + json.dumps(facts, indent=1, ensure_ascii=False)
-            + "\n\nSOP EXCERPTS (cite as [S#] in the Method section):\n\n" + sops)  # fmt: skip
+            + "\n\nSOP EXCERPTS (cite as [S#] in the Method section only where they support "
+              "the step; otherwise tag the step [project]):\n\n" + sops)  # fmt: skip
 
 
 def task_prompt(audience: str, errors: list[str] | None = None, previous: str | None = None) -> str:

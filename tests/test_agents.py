@@ -114,11 +114,52 @@ def test_rounding_tolerance():
 
 def test_method_section_needs_valid_citations():
     no_cite = GOOD.replace(" [S1]", "")
-    assert any("without an SOP citation" in e for e in validator.validate(no_cite, FACTS, 2))
+    assert any("without a citation" in e for e in validator.validate(no_cite, FACTS, 2))
     ghost = GOOD.replace("[S2]", "[S9]")
     assert any("[S9] does not exist" in e for e in validator.validate(ghost, FACTS, 2))
     no_method = GOOD.replace("## Method", "## How")
     assert any("Method" in e for e in validator.validate(no_method, FACTS, 2))
+
+
+CLAIM_A = "Water was mapped from Sentinel-2 with a water index and a threshold"
+CLAIM_B = "Optical mapping is limited by clouds and by the timing of the image"
+
+
+def method(body: str) -> str:
+    return f"# T\n\n## Method\n{body}\n"
+
+
+def test_citation_after_the_full_stop_counts():
+    # the live-run bug: "... threshold. [S1]" was split off and the sentence looked uncited
+    assert validator.check_citations(method(f"- {CLAIM_A}. [S1]\n- {CLAIM_B}. [S2]"), 2) == []
+    assert validator.check_citations(method(f"{CLAIM_A}. [S1] {CLAIM_B} [S2]."), 2) == []
+
+
+def test_uncited_sentence_is_still_caught():
+    errors = validator.check_citations(method(f"{CLAIM_A} [S1]. {CLAIM_B}."), 2)
+    assert len(errors) == 1 and CLAIM_B in errors[0]
+    assert "[S#]" in errors[0] and "[project]" in errors[0]  # the message says how to fix it
+
+
+def test_one_trailing_citation_covers_only_the_sentence_before_it():
+    errors = validator.check_citations(method(f"{CLAIM_A}. {CLAIM_B}. [S1]"), 2)
+    assert len(errors) == 1 and CLAIM_A in errors[0]
+
+
+def test_project_tag_marks_our_own_design_choices():
+    own = "Each pixel gets one land-use class by a fixed priority order, rice paddies first"
+    assert validator.check_citations(method(f"- {own} [project].\n- {CLAIM_A} [S1]."), 2) == []
+    assert validator.check_citations(method(f"- {own}. [project]"), 2) == []  # after the stop
+    assert validator.check_citations(method(f"- {own}."), 2)  # no tag at all: still caught
+    assert validator.check_citations(method(f"- {own} [projects]."), 2)  # only the exact tag
+
+
+def test_reporter_prompt_offers_project_tag_and_forbids_borrowed_citations():
+    from impactlens.agents import reporter
+
+    system = reporter.system_prompt()
+    assert "[project]" in system and "actually describes or supports" in system
+    assert "land-use priority order" in system
 
 
 def test_facts_dates_and_days_after_event():
@@ -176,6 +217,23 @@ def test_graph_sends_specific_errors_back_and_accepts_the_fix():
     assert state["status"] == "validated" and state["attempts"] == 2
     assert len(llm.prompts) == 6  # 3 reports x 2 attempts
     assert "FACT SHEET" in llm.prompts[0]["shared"] and "[S1]" in llm.prompts[0]["shared"]
+
+
+def test_run_json_keeps_errors_from_every_attempt(tmp_path):
+    def respond(system, shared, task, step):
+        if "agriculture" in step and "attempt1" in step:  # only agriculture fails, once
+            return GOOD.replace("2,059 ha", "2,350 ha")
+        return GOOD
+
+    state, _, tracker = run_graph(respond)
+    run = json.loads((save_run(state, tracker, tmp_path) / "run.json").read_text())
+    assert run["status"] == "validated"
+    assert run["attempts_per_report"] == {"emergency": 1, "agriculture": 2, "municipal": 1}
+    first, second = run["validation_history"]
+    assert "2,350" in first["errors"]["agriculture"][0]  # kept although it was fixed later
+    assert first["errors"]["emergency"] == [] and second["written"] == ["agriculture"]
+    assert second["errors"] == {"agriculture": []}
+    assert run["validation_errors"]["agriculture"] == []
 
 
 def test_graph_flags_for_human_review_after_two_retries(tmp_path):

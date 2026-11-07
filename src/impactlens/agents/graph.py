@@ -51,7 +51,9 @@ class State(TypedDict, total=False):
     facts: dict
     chunks: list[dict]
     reports: dict[str, str]
-    errors: dict[str, list[str]]
+    errors: dict[str, list[str]]  # latest validation result per report
+    written: list[str]  # reports (re)written by the latest Reporter attempt
+    history: Annotated[list[dict], operator.add]  # every attempt: what was written, its errors
     attempts: int
     status: str  # running | validated | needs_human_review | budget_exceeded
     log: Annotated[list[str], operator.add]
@@ -126,7 +128,7 @@ def build_graph(llm, retriever=None, steps=None):
         except BudgetExceeded as err:
             return {"reports": reports, "attempts": attempt, "status": "budget_exceeded",
                     "log": [f"reporter: STOPPED, {err}"]}  # fmt: skip
-        return {"reports": reports, "attempts": attempt, "status": "running",
+        return {"reports": reports, "attempts": attempt, "status": "running", "written": todo,
                 "log": [f"reporter: attempt {attempt}, wrote {todo}"]}  # fmt: skip
 
     def check(state: State) -> dict:
@@ -137,7 +139,10 @@ def build_graph(llm, retriever=None, steps=None):
         if bad and state["attempts"] > MAX_RETRIES:
             status = "needs_human_review"
         line = f"validator: attempt {state['attempts']}, errors {bad or 'none'}"
-        return {"errors": errors, "status": status, "log": [line]}
+        written = state.get("written", [])
+        record = {"attempt": state["attempts"], "written": written,
+                  "errors": {a: errors[a] for a in written}}  # fmt: skip
+        return {"errors": errors, "status": status, "history": [record], "log": [line]}
 
     def route_after_reporter(state: State) -> str:
         return "stop" if state["status"] == "budget_exceeded" else "validate"
@@ -177,11 +182,17 @@ def save_run(state: dict, tracker, out_dir: Path) -> Path:
         if state.get("status") != "validated" and (state.get("errors") or {}).get(audience):
             flag = "> **FLAGGED FOR HUMAN REVIEW**: failed automatic validation; see run.json.\n\n"
         (out_dir / f"report_{audience}.md").write_text(flag + text)
+    history = state.get("history") or []
+    per_report = {a: sum(a in h["written"] for h in history) for a in state.get("reports") or {}}
     run = {
         "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "status": state.get("status"),
         "attempts": state.get("attempts"),
-        "validation_errors": state.get("errors"),
+        "attempts_per_report": per_report,  # how many drafts each report needed
+        "validation_errors": state.get("errors"),  # final result
+        "validation_history": history,  # errors from every attempt, not just the last
+        "report_status": {a: "failed" if (state.get("errors") or {}).get(a) else "passed"
+                          for a in state.get("reports") or {}},  # fmt: skip
         "usage": tracker.totals(),
         "sop_excerpts": [{"id": f"S{i}", "chunk_id": c["chunk_id"], "title": c["title"],
                           "page": c["page"]} for i, c in enumerate(state.get("chunks", []), 1)],
