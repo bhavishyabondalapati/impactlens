@@ -97,13 +97,18 @@ IMPACT_LAYERS = {  # kind -> (mask layer, confidence layer)
 
 def run_rollup(scene_dir: Path, layers_dir: Path, aoi_path: Path, out_dir: Path,
                osm_dir: Path, map_png: Path | None = None, ndvi_map_png: Path | None = None,
-               log=print) -> dict:  # fmt: skip
+               log=print, backend: str = "postgis") -> dict:  # fmt: skip
+    """Polygonize the layers, fetch OSM, run the spatial rollup, write summary.json + GeoJSON.
+
+    backend: "postgis" (local docker, sql/rollup.sql) or "shapely" (no database; AWS Lambda).
+    Both feed the same geo/summary.py, so they produce the same summary.json.
+    """
     import rasterio
     from rasterio.warp import transform_geom
     from shapely.geometry import box, mapping, shape
 
     from impactlens.data.stac import load_aoi
-    from impactlens.geo import osm, postgis
+    from impactlens.geo import osm
     from impactlens.geo.polygonize import polygonize
 
     impacts, profile = {}, None
@@ -134,10 +139,11 @@ def run_rollup(scene_dir: Path, layers_dir: Path, aoi_path: Path, out_dir: Path,
     log(f"OSM: {len(landuse)} land-use polygons, {len(towns)} municipalities, "
         f"{len(coast.get('elements', []))} coastline ways (cache {osm_dir}/)")  # fmt: skip
 
-    with postgis.connect() as conn:
-        postgis.load(conn, shape(aoi_utm).wkt, epsg, landuse, impacts, mapping(land), towns)
-        log("loaded into PostGIS; running spatial SQL ...")
-        postgis.rollup(conn)
+    db = _backend(backend)
+    try:
+        db.load(shape(aoi_utm).wkt, epsg, landuse, impacts, mapping(land), towns)
+        log(f"loaded into the {db.name} backend; running the spatial rollup ...")
+        db.rollup()
         infer = json.loads((layers_dir / "infer_summary.json").read_text())
         scenes = json.loads((scene_dir / "scenes.json").read_text())
         context = {
@@ -149,32 +155,44 @@ def run_rollup(scene_dir: Path, layers_dir: Path, aoi_path: Path, out_dir: Path,
             "raster_stats_ha": infer["raster_stats"],
             "water_index_agreement": infer["water_index_agreement"],
         }
-        summary = postgis.build_summary(conn, context)
-        paddies = postgis.rice_paddy_outlines(conn)
+        summary = db.build_summary(context)
+        paddies = db.rice_paddy_outlines()
         summary["rice_paddies"].update(paddy_water_share(layers_dir, paddies, infer))
-        town_vegetation(layers_dir, postgis.town_shapes(conn), paddies, summary["by_town"])
+        town_vegetation(layers_dir, db.town_shapes(), paddies, summary["by_town"])
         summary["impacts"]["vegetation_loss_likely_mud"]["pct_of_vegetated_land_by_town"] = {
             t["name"]: t["ndvi_drop_pct_of_vegetated"] for t in summary["by_town"]
             if t.get("vegetated_ha_outside_rice_paddies", 0) >= 50  # tiny bases are noise
         }  # fmt: skip
-        land_utm = postgis.land_geometry(conn, epsg)
+        land_utm = db.land_geometry(epsg)
         summary["excluded"].update(sea_check(scene_dir, aoi_utm, land_utm))
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-        keep = "severity <> 'none' OR changed_ha > 0 OR ndvi_drop_ha > 0"
-        postgis.export_geojson(conn, out_dir / "impact_plots.geojson", "plot_impact", keep)
-        postgis.export_geojson(conn, out_dir / "hotspots.geojson", "hotspot")
+        db.export_geojson(out_dir / "impact_plots.geojson", "plot_impact", impacted_only=True)
+        db.export_geojson(out_dir / "hotspots.geojson", "hotspot")
         if map_png:
-            L.rollup_map(layers_dir, paddies, postgis.hotspot_shapes(conn), summary, map_png,
+            L.rollup_map(layers_dir, paddies, db.hotspot_shapes(), summary, map_png,
                          aoi_utm, land_utm)  # fmt: skip
             log(f"rollup map: {map_png}")
         if ndvi_map_png:
-            L.ndvi_drop_map(scene_dir / "after.tif", layers_dir, paddies,
-                            postgis.town_shapes(conn), aoi_utm, land_utm, summary,
-                            ndvi_map_png)  # fmt: skip
+            L.ndvi_drop_map(scene_dir / "after.tif", layers_dir, paddies, db.town_shapes(),
+                            aoi_utm, land_utm, summary, ndvi_map_png)  # fmt: skip
             log(f"NDVI-drop map: {ndvi_map_png}")
+    finally:
+        db.close()
     log(f"wrote {out_dir}/summary.json, impact_plots.geojson, hotspots.geojson")
     return summary
+
+
+def _backend(name: str):
+    if name == "postgis":
+        from impactlens.geo.postgis import PostgisBackend
+
+        return PostgisBackend()
+    if name == "shapely":
+        from impactlens.geo.rollup_shapely import ShapelyBackend
+
+        return ShapelyBackend()
+    raise ValueError(f"unknown rollup backend {name!r} (postgis | shapely)")
 
 
 def town_vegetation(layers_dir: Path, towns: list[dict], paddies: list[dict], rows: list[dict]):

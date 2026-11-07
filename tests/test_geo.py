@@ -216,12 +216,18 @@ def test_open_way_is_skipped():
     assert osm.landuse_features({"elements": [way]}) == []
 
 
-# --------------------------------------------------------------- PostGIS (optional)
+# ------------------------------------------- rollup: PostGIS (optional) and Shapely
 
 
-@pytest.fixture
-def db():
-    """A throwaway database in the local PostGIS container; skipped if it is not running."""
+@pytest.fixture(params=["postgis", "shapely"])
+def db(request):
+    """Each rollup test runs twice: in PostGIS (a throwaway database in the local container;
+    skipped if it is not running) and in the Shapely backend used by AWS Lambda."""
+    if request.param == "shapely":
+        from impactlens.geo.rollup_shapely import ShapelyBackend
+
+        yield ShapelyBackend()
+        return
     try:
         admin = postgis.connect("impactlens")
     except Exception:
@@ -230,7 +236,7 @@ def db():
         admin.execute("DROP DATABASE IF EXISTS impactlens_test")
         admin.execute("CREATE DATABASE impactlens_test")
     conn = postgis.connect("impactlens_test")
-    yield conn
+    yield postgis.PostgisBackend(conn)
     conn.close()
     with postgis.connect("impactlens") as admin:
         admin.execute("DROP DATABASE IF EXISTS impactlens_test")
@@ -259,9 +265,9 @@ def test_rollup_hectares_severity_paddies_and_hotspots(db):
             "mean_conf": 0.6, "pixels": 500}],
         "changed": [], "ndvi_drop": [],
     }  # fmt: skip
-    postgis.load(db, aoi.wkt, 32630, landuse, impacts)
-    postgis.rollup(db)
-    s = postgis.build_summary(db, {})
+    db.load(aoi.wkt, 32630, landuse, impacts)
+    db.rollup()
+    s = db.build_summary({})
 
     assert s["totals"]["aoi_ha"] == pytest.approx(100, abs=0.5)
     by = s["by_landuse"]
@@ -313,9 +319,9 @@ def test_sea_never_enters_a_total_and_impacts_split_by_town(db):
         # 3 ha change on residential, 1 ha on the orchard (not urban)
         "changed": [poly(400, 600, 700, 700), poly(700, 0, 800, 100)],
     }
-    postgis.load(db, aoi.wkt, 32630, landuse, impacts, _lonlat(land), [town])
-    postgis.rollup(db)
-    s = postgis.build_summary(db, {})
+    db.load(aoi.wkt, 32630, landuse, impacts, _lonlat(land), [town])
+    db.rollup()
+    s = db.build_summary({})
 
     assert "sea" not in s["by_landuse"]
     assert s["totals"]["land_ha"] == pytest.approx(80, abs=0.5)
@@ -353,10 +359,10 @@ def test_port_change_is_reported_apart_from_urban_change(db):
     ]  # fmt: skip
     changed = [{"geometry": mapping(box(LEFT + x, TOP - 300, LEFT + x + 100, TOP)),
                 "mean_conf": 0.9, "pixels": 300} for x in (100, 700)]  # fmt: skip
-    postgis.load(db, aoi.wkt, 32630, landuse, {"flooded": [], "ndvi_drop": [],
+    db.load(aoi.wkt, 32630, landuse, {"flooded": [], "ndvi_drop": [],
                                                "changed": changed})  # fmt: skip
-    postgis.rollup(db)
-    u = postgis.build_summary(db, {})["impacts"]["urban_change"]
+    db.rollup()
+    u = db.build_summary({})["impacts"]["urban_change"]
     assert u["changed_ha_on_urban_land"] == pytest.approx(3, abs=0.05)  # estate only
     assert u["port_excluded"]["changed_ha"] == pytest.approx(3, abs=0.05)
     assert u["port_excluded"]["area_ha"] == pytest.approx(50, abs=0.5)
@@ -369,9 +375,9 @@ def test_geojson_export_is_lonlat(db, tmp_path):
     flood = {"geometry": mapping(box(LEFT, TOP - 100, LEFT + 100, TOP)), "mean_conf": 0.9,
              "pixels": 100}  # fmt: skip
     imp = {"flooded": [flood], "changed": [], "ndvi_drop": []}
-    postgis.load(db, aoi.wkt, 32630, land, imp)
-    postgis.rollup(db)
-    path = postgis.export_geojson(db, tmp_path / "plots.geojson")
+    db.load(aoi.wkt, 32630, land, imp)
+    db.rollup()
+    path = db.export_geojson(tmp_path / "plots.geojson")
     fc = json.loads(path.read_text())
     (feat,) = fc["features"]
     lon, lat = shape(feat["geometry"]).centroid.coords[0]
