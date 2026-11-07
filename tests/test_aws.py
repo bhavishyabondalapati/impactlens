@@ -178,6 +178,7 @@ def test_starter_starts_one_run_per_request_file(monkeypatch):
 # ------------------------------------------- cloud replacements match the originals
 
 
+# Marked `needs_data` (CI deselects it) and skipped anywhere the files are missing.
 needs_valencia = pytest.mark.skipif(
     not (VALENCIA / "geo/summary.json").exists() or not (REPO / "data/raw/osm").exists(),
     reason="needs the local Valencia data (impactlens fetch / infer / rollup)",
@@ -195,6 +196,7 @@ def _leaves(x, path=""):
         yield path, x
 
 
+@pytest.mark.needs_data
 @needs_valencia
 def test_shapely_rollup_matches_postgis_on_valencia(tmp_path):
     """The Lambda rollup (Shapely, no database) against summary.json from PostGIS: every number
@@ -220,6 +222,7 @@ def test_shapely_rollup_matches_postgis_on_valencia(tmp_path):
     assert compared > 500
 
 
+@pytest.mark.needs_data
 @needs_valencia
 def test_geo_step_uses_the_osm_cache_in_the_bucket(tmp_path, monkeypatch):
     """GeoAnalyze with the OSM answers already in osm/: no Overpass request at all."""
@@ -248,6 +251,7 @@ def test_geo_step_uses_the_osm_cache_in_the_bucket(tmp_path, monkeypatch):
     assert facts["totals"]["flooded_ha_on_land"] == pytest.approx(2104.0, abs=0.5)
 
 
+@pytest.mark.needs_data
 @pytest.mark.skipif(not (REPO / "build/embedder/minilm.onnx").exists(),
                     reason="run `impactlens export-embedder` first")  # fmt: skip
 def test_onnx_embedder_matches_sentence_transformers():

@@ -28,6 +28,17 @@ impactlens = "impactlens.cli:main"
 [dependency-groups]
 dev = ["pytest", "ruff"]
 
+# On Linux (GitHub Actions CI), take torch from PyTorch's CPU-only index: the default Linux
+# wheel pulls about 3 GB of CUDA libraries that CI never uses. macOS keeps the normal wheel
+# (with the Apple Silicon "mps" backend).
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -37,6 +48,12 @@ packages = ["src/impactlens"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# CI runs `pytest -m "not needs_data and not network"`; tests/conftest.py explains each marker.
+markers = [
+    "needs_data: needs local files that are gitignored (raw datasets, processed Valencia run, build/)",
+    "network: calls a real web service (Earth Search, Overpass, Anthropic)",
+    "postgis: needs the PostGIS database (docker compose locally, a service container in CI)",
+]
 filterwarnings = ["ignore::PendingDeprecationWarning:rasterio"]
 
 [tool.ruff]

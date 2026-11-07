@@ -1,6 +1,7 @@
 """Geo-AI on tiny synthetic rasters: blending, flood logic, polygonize, OSM parsing, PostGIS."""
 
 import json
+import os
 
 import numpy as np
 import pytest
@@ -219,10 +220,12 @@ def test_open_way_is_skipped():
 # ------------------------------------------- rollup: PostGIS (optional) and Shapely
 
 
-@pytest.fixture(params=["postgis", "shapely"])
+@pytest.fixture(params=[pytest.param("postgis", marks=pytest.mark.postgis), "shapely"])
 def db(request):
-    """Each rollup test runs twice: in PostGIS (a throwaway database in the local container;
-    skipped if it is not running) and in the Shapely backend used by AWS Lambda."""
+    """Each rollup test runs twice: in PostGIS (a throwaway database in the local container,
+    or the service container in CI) and in the Shapely backend used by AWS Lambda.
+    Locally the PostGIS run is skipped if the container is not up; CI sets REQUIRE_POSTGIS=1
+    so a broken database fails the build instead of being skipped quietly."""
     if request.param == "shapely":
         from impactlens.geo.rollup_shapely import ShapelyBackend
 
@@ -230,8 +233,10 @@ def db(request):
         return
     try:
         admin = postgis.connect("impactlens")
-    except Exception:
-        pytest.skip("PostGIS not running (docker compose up -d)")
+    except Exception as e:
+        if os.environ.get("REQUIRE_POSTGIS"):
+            raise
+        pytest.skip(f"PostGIS not running (docker compose up -d): {e}")
     with admin:
         admin.execute("DROP DATABASE IF EXISTS impactlens_test")
         admin.execute("CREATE DATABASE impactlens_test")

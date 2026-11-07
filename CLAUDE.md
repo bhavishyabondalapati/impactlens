@@ -49,7 +49,7 @@ Work **phase by phase and stop for review after each phase**. Do not start the n
 
 ```bash
 uv sync                 # install deps
-uv run pytest           # tests
+uv run pytest           # tests (CI: -m "not needs_data and not network", PostGIS service container)
 uv run ruff check .     # lint
 uv run ruff format .    # format
 docker compose up -d    # local PostGIS for Phase 4 (password in .env)
