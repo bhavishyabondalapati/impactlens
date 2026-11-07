@@ -125,7 +125,10 @@ def _faiss():
     import importlib
     import os
 
-    import torch  # noqa: F401  torch's runtime must come first: the other order segfaults
+    try:
+        import torch  # noqa: F401  torch's runtime must come first: the other order segfaults
+    except ImportError:
+        pass  # the AWS Lambda image has no torch (ONNX embedder), so there is no clash there
 
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     faiss = importlib.import_module("faiss")

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from impactlens.data.oscd import tile_starts
+from impactlens.data.preprocess import tile_starts
 
 Predictor = Callable[..., np.ndarray]  # (B,C,T,T) arrays -> (B,1,T,T) probabilities
 

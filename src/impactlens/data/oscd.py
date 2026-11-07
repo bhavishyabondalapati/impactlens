@@ -30,11 +30,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from impactlens.data.preprocess import (
+from impactlens.data.preprocess import (  # noqa: F401  tile_starts re-exported
     OSCD_BAND_FILES,
     dn_to_reflectance,
     normalize,
     random_flip_rotate,
+    tile_starts,
 )
 
 TILE_SIZE = 256
@@ -179,16 +180,6 @@ def load_city(root: str | Path, city: str, split: str) -> City:
     h = min(img1.shape[1], img2.shape[1], mask.shape[0])
     w = min(img1.shape[2], img2.shape[2], mask.shape[1])
     return City(city, normalize(img1[:, :h, :w]), normalize(img2[:, :h, :w]), mask[:h, :w])
-
-
-def tile_starts(length: int, tile: int, stride: int) -> list[int]:
-    """Start offsets along one axis. The last tile is shifted back so the edge is covered."""
-    if length <= tile:
-        return [0]
-    starts = list(range(0, length - tile + 1, stride))
-    if starts[-1] != length - tile:
-        starts.append(length - tile)
-    return starts
 
 
 def _pad_to(arr: np.ndarray, size: int) -> np.ndarray:

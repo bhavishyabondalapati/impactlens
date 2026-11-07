@@ -9,7 +9,6 @@ before/after dates is preserved instead of being "normalized away".
 from __future__ import annotations
 
 import numpy as np
-import torch
 
 # Order of the 4 channels everywhere in this project: RGB + near-infrared.
 BAND_NAMES = ("blue", "green", "red", "nir")
@@ -56,14 +55,26 @@ def normalize(reflectance: np.ndarray, band_clips: tuple[float, ...] = BAND_CLIP
     return (np.clip(reflectance, 0.0, clips) / clips).astype(np.float32)
 
 
-def random_flip_rotate(x: torch.Tensor) -> torch.Tensor:
+def random_flip_rotate(x: torch.Tensor) -> torch.Tensor:  # noqa: F821
     """Random horizontal/vertical flip and 90-degree rotation of a (C, H, W) tensor.
 
     Stack every layer that must stay aligned (images, mask, valid-mask) into ONE tensor
     before calling this, so they all get exactly the same transform.
     """
+    import torch  # training only; inference (and the AWS Lambdas) run without PyTorch
+
     if torch.rand(1) < 0.5:
         x = torch.flip(x, dims=(-1,))
     if torch.rand(1) < 0.5:
         x = torch.flip(x, dims=(-2,))
     return torch.rot90(x, int(torch.randint(0, 4, (1,))), dims=(-2, -1))
+
+
+def tile_starts(length: int, tile: int, stride: int) -> list[int]:
+    """Start offsets along one axis. The last tile is shifted back so the edge is covered."""
+    if length <= tile:
+        return [0]
+    starts = list(range(0, length - tile + 1, stride))
+    if starts[-1] != length - tile:
+        starts.append(length - tile)
+    return starts

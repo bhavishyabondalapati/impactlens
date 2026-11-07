@@ -32,12 +32,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from impactlens.data.oscd import tile_starts
 from impactlens.data.preprocess import (
     FLOOD_BAND_CLIPS,
     dn_to_reflectance,
     normalize,
     random_flip_rotate,
+    tile_starts,
 )
 
 SPLITS = ("train", "valid", "test", "bolivia")
