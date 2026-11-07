@@ -70,11 +70,12 @@ def test_load_aoi_accepts_feature_collection_and_bare_geometry(tmp_path):
     assert load_aoi(fc).equals(poly)
 
 
-def test_repo_aoi_is_about_15km():
+def test_repo_aoi_is_about_15_by_19km():
+    # ~15 km wide; ~19 km tall since the north edge moved to 39.44 N to take in Paiporta
     aoi = load_aoi("aoi/valencia_albufera.geojson")
     grid = make_grid(aoi, UTM)
     assert 13_000 < grid.width * 10 < 17_000
-    assert 13_000 < grid.height * 10 < 17_000
+    assert 17_000 < grid.height * 10 < 21_000
 
 
 def test_make_grid_is_snapped_and_covers_aoi(aoi_file):

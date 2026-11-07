@@ -5,17 +5,32 @@
     {
       "type": "Feature",
       "properties": {
-        "note": "~15x15 km of rice/citrus farmland around the Albufera, south of Valencia, Spain"
+        "note": "~15 x 18.5 km around the Albufera, south of Valencia, Spain: rice/citrus farmland plus the l'Horta Sud towns (Paiporta, Massanassa, Catarroja, Alfafar, Sedavi) hit by the Oct 2024 DANA"
       },
       "geometry": {
         "type": "Polygon",
         "coordinates": [
           [
-            [-0.457, 39.273],
-            [-0.283, 39.273],
-            [-0.283, 39.407],
-            [-0.457, 39.407],
-            [-0.457, 39.273]
+            [
+              -0.457,
+              39.273
+            ],
+            [
+              -0.283,
+              39.273
+            ],
+            [
+              -0.283,
+              39.44
+            ],
+            [
+              -0.457,
+              39.44
+            ],
+            [
+              -0.457,
+              39.273
+            ]
           ]
         ]
       }

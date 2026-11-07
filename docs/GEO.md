@@ -25,7 +25,7 @@ Outputs (gitignored, under `data/processed/valencia_albufera/`):
    confidence. **OSM** via Overpass (`geo/osm.py`), cached in `data/raw/osm/`: land use,
    municipalities (admin_level 8) and the coastline. **Land mask**: the AOI is cut along the
    OSM `natural=coastline` ways (OSM draws them with land on the left); the sea side enters no
-   total. Cross-check: 99.6% of that sea is MNDWI water on the before date.
+   total. Cross-check: 98.7% of that sea is MNDWI water on the before date.
 5. **Spatial SQL** (`geo/sql/rollup.sql`, all in EPSG:32630 metres):
    - exclusive land cover per type (OSM polygons overlap; priority rice_paddy > water >
      residential > industrial > orchard > farmland > wetland > other; rest of the land =
@@ -41,74 +41,89 @@ Outputs (gitignored, under `data/processed/valencia_albufera/`):
 
 ## Valencia results (before 2024-10-26, after 2024-11-10)
 
-AOI 22,327 ha: 16,747 ha land, 2,656 ha inland water (Albufera lake, canals), 2,923 ha sea.
+AOI: -0.457 to -0.283 E, 39.273 to 39.440 N (the north edge was moved up from 39.407 to take in
+Paiporta and the other l'Horta Sud towns; re-fetching picked the same two scenes). 27,819 ha:
+20,757 ha land, 2,785 ha inland water (Albufera lake, canals, the Turia channel), 4,277 ha sea.
 
 | impact (on land) | hectares | what it means |
 |---|---|---|
-| Standing water (new water) | 1,961 | 98% of it (1,920 ha) is in rice paddies: confounded, see below |
-| ...outside rice paddies | 41 | |
-| Vegetation loss / likely mud (NDVI drop outside paddies) | 320 | candidate damage footprint |
-| NDVI drop inside paddies (not counted above) | 506 | harvest / paddy flooding, ambiguous |
-| Change on urban land (OSCD model) | 60 | 44 ha industrial, 15 ha residential |
-| *Excluded: sea "flooded"* | *655* | *model domain gap on the before date; never in a total* |
+| Standing water (new water) | 2,104 | 98% of it (2,059 ha) is in rice paddies: confounded, see below |
+| ...outside rice paddies | 45 | |
+| Vegetation loss / likely mud (NDVI drop outside paddies) | 643 | candidate damage footprint |
+| NDVI drop inside paddies (not counted above) | 542 | harvest / paddy flooding, ambiguous |
+| Change on urban land (OSCD model) | 222 | 163 ha industrial, 59 ha residential |
+| *Excluded: sea "flooded"* | *688* | *model domain gap on the before date; never in a total* |
 
-**Day 12 is too late for water.** The DANA hit on Oct 29. By Nov 10 the standing water in the
-towns west of the lake had drained and left mud, so a water detector correctly finds almost
-nothing there (41 ha outside paddies). The remaining new water is in the paddies.
+**Day 12 is too late for water.** The DANA hit on Oct 29. By Nov 10 the standing water in
+l'Horta Sud had drained and left mud, so a water detector correctly finds almost nothing in the
+towns (under 1.5 ha of new water outside the paddies in each of Paiporta, Sedaví, Alfafar and
+Massanassa). The
+remaining new water is in the paddies.
 
-**The damage shows up as vegetation loss on the Barranco del Poyo towns.** NDVI drop as a share
-of each town's vegetated land outside the paddies (towns with >= 50 ha vegetated):
+**The damage shows up as vegetation loss along the Barranco del Poyo.** NDVI drop as a share of
+each town's vegetated land outside the paddies (towns with >= 50 ha vegetated in the AOI):
 
 | town | vegetated ha (outside paddies) | NDVI drop ha | rate |
 |---|---|---|---|
-| Massanassa | 87 | 26 | **29%** |
+| Paiporta | 167 | 69 | **42%** |
+| Sedaví | 55 | 22 | **41%** |
+| Alfafar | 157 | 58 | **37%** |
+| Massanassa | 122 | 37 | **31%** |
 | Beniparrell | 188 | 30 | **16%** |
-| Catarroja | 313 | 49 | **16%** |
+| Catarroja | 510 | 68 | **13%** |
 | Albal | 344 | 36 | **10%** |
+| València (southern districts) | 1,722 | 164 | 9.5% |
+| Picanya (62% of it in the AOI) | 310 | 29 | 9.3% |
 | Alcàsser | 490 | 27 | 5.5% |
-| València (southern part) | 1,241 | 57 | 4.6% |
 | Almussafes | 395 | 12 | 3.0% |
 | Silla | 934 | 23 | 2.5% |
 | Benifaió | 675 | 17 | 2.5% |
 | Sollana | 528 | 12 | 2.2% |
+| Torrent (8% of it in the AOI) | 392 | 8 | 2.0% |
 | Picassent | 1,177 | 22 | 1.9% |
 
-The four towns on the Poyo's path to the lake lose vegetation at 10-29%. Similar huerta towns to
-the south and west sit at 2-3%, five to ten times lower. On the map the orange is concentrated in
-the north of the AOI and in strips running toward the lake. This is consistent with mud
-deposits and flattened vegetation, but NDVI alone can't prove it: harvest, ploughing and pruning
-also drop NDVI, and mud on streets and roofs is invisible here because that ground was not
-vegetated before. Most of the drop (211 of 320 ha) is on land OSM has no land-use tag for, so
-the per-class split is weaker than the per-town one.
+Benetússer (11 ha vegetated) and Sueca (35 ha in the AOI) are too small to rank.
+
+Paiporta, where the Poyo overflowed, has the highest rate, followed by the towns downstream of it
+on the way to the lake (Sedaví, Alfafar, Massanassa) at 31-41%. Similar huerta towns to the south
+and west (Silla, Sollana, Benifaió, Almussafes, Picassent) sit at 2-3%, ten to twenty times
+lower. On the map the orange is concentrated around Paiporta and in the strip between the towns
+and the lake. The OSCD change on urban land follows the same towns: Paiporta 34 ha, Alfafar
+33 ha, Catarroja 29 ha, Massanassa 22 ha, against 1-2 ha in Silla, Picassent and Almussafes.
+
+This is consistent with mud deposits and flattened vegetation, but NDVI alone can't prove it:
+harvest, ploughing and pruning also drop NDVI, and mud on streets and roofs is invisible here
+because that ground was not vegetated before. Most of the drop (422 of 643 ha) is on land with no
+OSM land-use tag, so the per-class split is weaker than the per-town one. Urban change is not
+damage by itself either: the Port of València (134 ha of industrial land in the AOI) adds about
+21 ha of "change" from ships and containers moving.
 
 ![NDVI drop by town](images/valencia_ndvi_drop.png)
 
-**The AOI misses the worst-hit towns.** The AOI's north edge is 39.407 N. Only Albal and the
-southern part of Catarroja's centre are inside. Paiporta (39.428 N), Picanya (39.435), Massanassa
-(39.411), Alfafar (39.420), Benetússer (39.423) and Sedaví (39.425) are all north of it; their
-municipal land inside the AOI is mostly paddy and lake shore. They lie north, not west: the west
-edge (-0.457) already covers them in longitude. Extending the north edge to about 39.44 N
-(+3.7 km) would bring all of them in.
+**AOI coverage.** Paiporta, Sedaví, Alfafar, Massanassa, Benetússer, Catarroja and Albal are now
+96-100% inside the AOI. Picanya is 62% inside and Torrent 8%; both reach further west and north.
+Aldaia, Alaquàs, Xirivella and the rest of València's city districts are outside.
 
 **Known confound: rice paddies.** Albufera paddies are flooded on purpose in late autumn and
-winter. 41.0% of paddy area was already water on Oct 26 (three days BEFORE the Oct 29 DANA) and
-69.9% on Nov 10. The DANA floodwater also drained into the Albufera through l'Horta Sud, so the
+winter. 39.0% of paddy area was already water on Oct 26 (three days BEFORE the Oct 29 DANA) and
+68.4% on Nov 10. The DANA floodwater also drained into the Albufera through l'Horta Sud, so the
 extra paddy water can be either cause, and two optical dates cannot tell them apart. That is why
 the paddies are a flagged confound rather than counted as damage or as farming.
 The paddies are reported separately (`rice_paddies` in the summary, `seasonal_flooding_flag` per
-plot), never dropped. The OSCD change model also fires on the paddies (1,892 ha of its change), as
+plot), never dropped. The OSCD change model also fires on the paddies (2,025 ha of its change), as
 expected for a model trained on urban change: flooding a field is a big visual change.
 
 **Sanity check (model vs water indices on Valencia, IoU of the water masks):**
 
-| date | NDWI > 0 | MNDWI > 0 | MNDWI > 0.15 |
-|---|---|---|---|
-| before | 0.78 | 0.84 | 0.85 |
-| after | 0.90 | 0.95 | 0.95 |
+| date | NDWI > 0 | MNDWI > 0 | MNDWI > 0.15 | MNDWI > 0, land only | MNDWI > 0, sea only |
+|---|---|---|---|---|---|
+| before | 0.79 | 0.84 | 0.85 | 0.86 | 0.82 |
+| after | 0.86 | 0.91 | 0.91 | 0.94 | 0.87 |
 
-Agreement is high, so the L1C-train / L2A-inference gap does not break the model overall. It does
-show up in one place: part of the **open sea on Oct 26** gets P(water) ~0.37 from the model while
-MNDWI there is 0.74 (clearly water). That sea strip then looks "flooded" on Nov 10 (655 ha).
+On land the agreement is high, so the L1C-train / L2A-inference gap does not break the model
+there. It shows up at sea: the model under-calls dark open water (part of the **open sea on
+Oct 26** gets P(water) ~0.37 while MNDWI is 0.74, clearly water), and the extended AOI adds more
+sea and the Port of València. That sea strip then looks "flooded" on Nov 10 (688 ha).
 The OSM coastline mask puts it in the `sea` class, so it enters no total and no hotspot; it is
 kept under `excluded` in the summary as a diagnostic.
 
