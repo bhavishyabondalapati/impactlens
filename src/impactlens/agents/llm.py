@@ -77,6 +77,12 @@ class CostTracker:
                 f.write(json.dumps(row) + "\n")
         return c
 
+    @classmethod
+    def resume(cls, model: str, budget_usd: float, calls: list[dict]) -> CostTracker:
+        """Continue a run's budget from its logged calls (AWS: each Lambda is a new process)."""
+        return cls(model, budget_usd, spent_usd=sum(c["cost_usd"] for c in calls),
+                   calls=list(calls))  # fmt: skip
+
     def totals(self) -> dict:
         keys = ("input_tokens", "output_tokens", "cache_creation_input_tokens",
                 "cache_read_input_tokens")  # fmt: skip
@@ -94,7 +100,7 @@ class AnthropicLLM:
 
         from impactlens.geo.postgis import load_dotenv
 
-        load_dotenv()  # ANTHROPIC_API_KEY lives only in .env
+        load_dotenv()  # locally ANTHROPIC_API_KEY lives only in .env; on AWS it comes from SSM
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("ANTHROPIC_API_KEY missing: add it to .env (see .env.example)")
         self.client = anthropic.Anthropic()

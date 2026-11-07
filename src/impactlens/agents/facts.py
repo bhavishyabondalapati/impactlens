@@ -21,13 +21,17 @@ TOWN_KEYS = ("name", "land_in_aoi_ha", "pct_of_municipality_in_aoi",
              "flooded_ha_in_rice_paddies", "urban_changed_ha")  # fmt: skip
 
 
-def build_facts(summary: dict, aoi_bounds: list[float] | None = None) -> dict:
+def build_facts(
+    summary: dict, aoi_bounds: list[float] | None = None, event: dict | None = None
+) -> dict:
+    """``event`` ({"name", "event_date"}) defaults to the Valencia DANA (a request can set it)."""
+    event = event or EVENT
     before = summary.get("before_scene", "")
     after = summary.get("after_scene", "")
     before_date, after_date = _scene_date(before), _scene_date(after)
     days_after = None
     if after_date:
-        days_after = (date.fromisoformat(after_date) - date.fromisoformat(EVENT["event_date"])).days
+        days_after = (date.fromisoformat(after_date) - date.fromisoformat(event["event_date"])).days
     imp = summary["impacts"]
     no_notes = lambda d: {k: v for k, v in d.items() if k not in ("note", "label")}  # noqa: E731
     urban = no_notes(imp["urban_change"])
@@ -35,7 +39,7 @@ def build_facts(summary: dict, aoi_bounds: list[float] | None = None) -> dict:
     rice = no_notes(summary["rice_paddies"])
     return {
         "event": {
-            **EVENT,
+            **event,
             "before_image_date": before_date,
             "after_image_date": after_date,
             "after_image_days_after_event": days_after,

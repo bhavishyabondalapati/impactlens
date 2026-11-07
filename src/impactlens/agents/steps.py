@@ -1,0 +1,106 @@
+"""The work of the Retriever, Reporter and Validator agents, as plain functions.
+
+Two orchestrators call these same functions:
+  - locally, the LangGraph graph (agents/graph.py), all in one process;
+  - on AWS, Step Functions, one Lambda per step (aws/steps.py), with the state kept in S3.
+Keeping the logic here means the retry loop, the cost cap and the validation rules are the
+same in both, and the tests cover both.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+from impactlens.agents import reporter
+from impactlens.agents.llm import BudgetExceeded
+from impactlens.agents.validator import validate
+
+MAX_RETRIES = 2  # after the first draft: so at most 3 drafts per report
+RETRIEVAL_QUERIES = (
+    "mapping flood water extent from Sentinel-2 with a water index such as NDWI and a threshold",
+    "limitations of optical flood mapping: clouds, urban areas, shadows, timing of the image",
+    "damage assessment methods from satellite imagery and how damage grades are assigned",
+    "quality control and accuracy of rapid mapping products",
+    "estimating agricultural damage and loss for crops after a disaster",
+    "post-disaster needs assessment: baseline, damage, losses and recovery needs",
+)
+
+
+def retrieve_chunks(retriever, k: int = 2) -> list[dict]:
+    """Top-k excerpts per method query, without duplicates: the shared S1..Sn list."""
+    seen, chunks = set(), []
+    for q in RETRIEVAL_QUERIES:
+        for _score, c in retriever.search(q, k=k):
+            if c.chunk_id not in seen:
+                seen.add(c.chunk_id)
+                chunks.append({"chunk_id": c.chunk_id, "source": c.source,
+                               "title": c.title, "page": c.page, "text": c.text})  # fmt: skip
+    return chunks
+
+
+def write_reports(llm, state: dict) -> dict:
+    """Reporter: (re)write every report that is missing or failed validation.
+
+    Returns the state update: reports, attempts, status (running | budget_exceeded),
+    written (which reports this attempt produced) and a log line.
+    """
+    reports = dict(state.get("reports") or {})
+    errors = state.get("errors") or {}
+    shared = reporter.shared_context(state["facts"], state["chunks"])
+    todo = [a for a in reporter.AUDIENCES if a not in reports or errors.get(a)]
+    attempt = state.get("attempts", 0) + 1
+    try:
+        for a in todo:
+            task = reporter.task_prompt(a, errors.get(a), reports.get(a))
+            reports[a] = llm.complete(reporter.system_prompt(), shared, task,
+                                      step=f"reporter:{a}:attempt{attempt}")  # fmt: skip
+    except BudgetExceeded as err:
+        return {"reports": reports, "attempts": attempt, "status": "budget_exceeded",
+                "written": [], "log": [f"reporter: STOPPED, {err}"]}  # fmt: skip
+    return {"reports": reports, "attempts": attempt, "status": "running", "written": todo,
+            "log": [f"reporter: attempt {attempt}, wrote {todo}"]}  # fmt: skip
+
+
+def check_reports(state: dict) -> dict:
+    """Validator: errors per report; status validated, running (retry) or needs_human_review."""
+    n = len(state["chunks"])
+    errors = {a: validate(r, state["facts"], n) for a, r in state["reports"].items()}
+    bad = {a: len(e) for a, e in errors.items() if e}
+    status = "validated" if not bad else state.get("status", "running")
+    if bad and state["attempts"] > MAX_RETRIES:
+        status = "needs_human_review"
+    line = f"validator: attempt {state['attempts']}, errors {bad or 'none'}"
+    written = state.get("written", [])
+    record = {"attempt": state["attempts"], "written": written,
+              "errors": {a: errors[a] for a in written}}  # fmt: skip
+    return {"errors": errors, "status": status, "history": [record], "log": [line]}
+
+
+def save_run(state: dict, tracker, out_dir: Path) -> Path:
+    """Reports as Markdown + run.json (status, validation errors, tokens, cost, SOP ids)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for audience, text in (state.get("reports") or {}).items():
+        flag = ""
+        if state.get("status") != "validated" and (state.get("errors") or {}).get(audience):
+            flag = "> **FLAGGED FOR HUMAN REVIEW**: failed automatic validation; see run.json.\n\n"
+        (out_dir / f"report_{audience}.md").write_text(flag + text)
+    history = state.get("history") or []
+    per_report = {a: sum(a in h["written"] for h in history) for a in state.get("reports") or {}}
+    run = {
+        "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "status": state.get("status"),
+        "attempts": state.get("attempts"),
+        "attempts_per_report": per_report,  # how many drafts each report needed
+        "validation_errors": state.get("errors"),  # final result
+        "validation_history": history,  # errors from every attempt, not just the last
+        "report_status": {a: "failed" if (state.get("errors") or {}).get(a) else "passed"
+                          for a in state.get("reports") or {}},  # fmt: skip
+        "usage": tracker.totals(),
+        "sop_excerpts": [{"id": f"S{i}", "chunk_id": c["chunk_id"], "title": c["title"],
+                          "page": c["page"]} for i, c in enumerate(state.get("chunks", []), 1)],
+        "log": state.get("log"),
+    }  # fmt: skip
+    (out_dir / "run.json").write_text(json.dumps(run, indent=2, ensure_ascii=False))
+    return out_dir
