@@ -96,9 +96,11 @@ IMPACT_LAYERS = {  # kind -> (mask layer, confidence layer)
 
 
 def run_rollup(scene_dir: Path, layers_dir: Path, aoi_path: Path, out_dir: Path,
-               osm_cache: Path, map_png: Path | None = None, log=print) -> dict:  # fmt: skip
+               osm_dir: Path, map_png: Path | None = None, ndvi_map_png: Path | None = None,
+               log=print) -> dict:  # fmt: skip
     import rasterio
-    from shapely.geometry import box
+    from rasterio.warp import transform_geom
+    from shapely.geometry import box, mapping, shape
 
     from impactlens.data.stac import load_aoi
     from impactlens.geo import osm, postgis
@@ -107,21 +109,33 @@ def run_rollup(scene_dir: Path, layers_dir: Path, aoi_path: Path, out_dir: Path,
     impacts, profile = {}, None
     for kind, (mask_name, conf_name) in IMPACT_LAYERS.items():
         with rasterio.open(layers_dir / f"{mask_name}.tif") as src:
-            mask, profile, bounds = src.read(1), src.profile, src.bounds
+            mask, profile = src.read(1), src.profile
         with rasterio.open(layers_dir / f"{conf_name}.tif") as src:
             conf = np.clip(src.read(1), 0, 1)  # NDVI drop of 0.4 -> "confidence" 0.4
         impacts[kind] = polygonize(mask, conf, profile["transform"])
         log(f"polygonized {kind}: {len(impacts[kind])} polygons")
     epsg = profile["crs"].to_epsg()
 
+    # The analysis area is the AOI polygon itself (not the raster's UTM bounding box, whose
+    # corners stick out of the lon/lat rectangle and have no OSM data).
     aoi = load_aoi(aoi_path)
+    aoi_utm = transform_geom("EPSG:4326", f"EPSG:{epsg}", mapping(aoi.segmentize(0.001)))
     west, south, east, north = aoi.bounds
-    data = osm.fetch_overpass(osm.overpass_query(south, west, north, east), osm_cache, log=log)
-    landuse = osm.landuse_features(data)
-    log(f"OSM land use: {len(landuse)} polygons (cache {osm_cache})")
+    cache = lambda what: osm_dir / f"{aoi_path.stem}_{what}.json"  # noqa: E731
+    bbox = (south, west, north, east)
+    landuse = osm.landuse_features(
+        osm.fetch_overpass(osm.overpass_query(*bbox), cache("landuse"), log=log)
+    )
+    coast = osm.fetch_overpass(osm.coastline_query(*bbox), cache("coastline"), log=log)
+    land = osm.land_polygon(coast, box(west, south, east, north))
+    towns = osm.municipalities(
+        osm.fetch_overpass(osm.municipality_query(*bbox), cache("municipalities"), log=log)
+    )
+    log(f"OSM: {len(landuse)} land-use polygons, {len(towns)} municipalities, "
+        f"{len(coast.get('elements', []))} coastline ways (cache {osm_dir}/)")  # fmt: skip
 
     with postgis.connect() as conn:
-        postgis.load(conn, box(*bounds).wkt, epsg, landuse, impacts)
+        postgis.load(conn, shape(aoi_utm).wkt, epsg, landuse, impacts, mapping(land), towns)
         log("loaded into PostGIS; running spatial SQL ...")
         postgis.rollup(conn)
         infer = json.loads((layers_dir / "infer_summary.json").read_text())
@@ -138,17 +152,79 @@ def run_rollup(scene_dir: Path, layers_dir: Path, aoi_path: Path, out_dir: Path,
         summary = postgis.build_summary(conn, context)
         paddies = postgis.rice_paddy_outlines(conn)
         summary["rice_paddies"].update(paddy_water_share(layers_dir, paddies, infer))
+        town_vegetation(layers_dir, postgis.town_shapes(conn), paddies, summary["by_town"])
+        summary["impacts"]["vegetation_loss_likely_mud"]["pct_of_vegetated_land_by_town"] = {
+            t["name"]: t["ndvi_drop_pct_of_vegetated"] for t in summary["by_town"]
+            if t.get("vegetated_ha_outside_rice_paddies", 0) >= 50  # tiny bases are noise
+        }  # fmt: skip
+        land_utm = postgis.land_geometry(conn, epsg)
+        summary["excluded"].update(sea_check(scene_dir, aoi_utm, land_utm))
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
         keep = "severity <> 'none' OR changed_ha > 0 OR ndvi_drop_ha > 0"
         postgis.export_geojson(conn, out_dir / "impact_plots.geojson", "plot_impact", keep)
         postgis.export_geojson(conn, out_dir / "hotspots.geojson", "hotspot")
         if map_png:
-            L.rollup_map(layers_dir, paddies,
-                         postgis.hotspot_shapes(conn), summary, map_png)  # fmt: skip
+            L.rollup_map(layers_dir, paddies, postgis.hotspot_shapes(conn), summary, map_png,
+                         aoi_utm, land_utm)  # fmt: skip
             log(f"rollup map: {map_png}")
+        if ndvi_map_png:
+            L.ndvi_drop_map(scene_dir / "after.tif", layers_dir, paddies,
+                            postgis.town_shapes(conn), aoi_utm, land_utm, summary,
+                            ndvi_map_png)  # fmt: skip
+            log(f"NDVI-drop map: {ndvi_map_png}")
     log(f"wrote {out_dir}/summary.json, impact_plots.geojson, hotspots.geojson")
     return summary
+
+
+def town_vegetation(layers_dir: Path, towns: list[dict], paddies: list[dict], rows: list[dict]):
+    """Add each town's vegetated land outside paddies, and NDVI drop as a % of it (in place).
+
+    Raw hectares favour big towns; the rate (drop / ground that COULD show a drop) is the fair
+    way to compare a hard-hit town with a quiet one.
+    """
+    import rasterio
+    from rasterio.features import rasterize
+
+    with rasterio.open(layers_dir / "ndvi_before.tif") as src:
+        vegetated, transform = src.read(1) > 0.3, src.transform
+    with rasterio.open(layers_dir / "valid.tif") as src:
+        vegetated &= src.read(1).astype(bool)
+    hw = vegetated.shape
+    if paddies:
+        vegetated &= rasterize(((g, 1) for g in paddies), out_shape=hw, transform=transform) == 0
+    px_ha = abs(transform.a * transform.e) / 10_000
+    shapes = {t["name"]: t["geometry"] for t in towns}
+    for row in rows:
+        if row["name"] not in shapes:
+            continue
+        inside = rasterize([(shapes[row["name"]], 1)], out_shape=hw, transform=transform) > 0
+        veg_ha = float((vegetated & inside).sum() * px_ha)
+        row["vegetated_ha_outside_rice_paddies"] = round(veg_ha, 1)
+        drop = row["ndvi_drop_ha_outside_rice_paddies"]
+        row["ndvi_drop_pct_of_vegetated"] = round(100 * drop / veg_ha, 1) if veg_ha else None
+
+
+def sea_check(scene_dir: Path, aoi_utm: dict, land_utm: dict) -> dict:
+    """Cross-check the OSM sea mask with the before-date MNDWI (an index, no model involved).
+
+    Nearly all of the OSM sea should be MNDWI water before the event; if it is, the coastline
+    mask is right and the 'sea flooding' was the model's domain gap.
+    """
+    import rasterio
+    from rasterio.features import rasterize
+
+    from impactlens.geo.indices import mndwi
+
+    with rasterio.open(scene_dir / "before.tif") as src:
+        before, transform = src.read(), src.transform
+    hw = before.shape[1:]
+    land = rasterize([(land_utm, 1)], out_shape=hw, transform=transform) > 0
+    in_aoi = rasterize([(aoi_utm, 1)], out_shape=hw, transform=transform) > 0
+    index = mndwi(before)
+    sea = in_aoi & ~land & (before.sum(0) > 0)  # nodata pixels are 0 in every band
+    n = max(int(sea.sum()), 1)
+    return {"mndwi_before_water_pct_of_sea": round(100 * float((index[sea] > 0).sum()) / n, 1)}
 
 
 def paddy_water_share(layers_dir: Path, paddies: list[dict], infer: dict) -> dict:

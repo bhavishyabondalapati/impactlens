@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     rollup.add_argument("--scene", type=Path, default=Path("data/processed/valencia_albufera"))
     rollup.add_argument("--aoi", type=Path, default=Path("aoi/valencia_albufera.geojson"))
     rollup.add_argument("--map", type=Path, default=None, help="rollup map PNG (optional)")
+    rollup.add_argument("--ndvi-map", type=Path, default=None,
+                        help="NDVI-drop by town map PNG (optional)")  # fmt: skip
     return parser
 
 
@@ -59,9 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "rollup":
         from impactlens.geo.pipeline import run_rollup
 
-        cache = Path("data/raw/osm") / f"{args.aoi.stem}_landuse.json"
-        run_rollup(args.scene, args.scene / "layers", args.aoi, args.scene / "geo", cache,
-                   args.map)  # fmt: skip
+        run_rollup(args.scene, args.scene / "layers", args.aoi, args.scene / "geo",
+                   Path("data/raw/osm"), args.map, args.ndvi_map)  # fmt: skip
     return 0
 
 

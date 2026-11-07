@@ -100,6 +100,27 @@ def test_written_layers_keep_georeferencing(tmp_path):
         assert src.dtypes[0] == "uint8" and src.read(1).sum() == out["flooded"].sum()
 
 
+def test_town_ndvi_drop_rate_ignores_paddies_and_bare_ground(tmp_path):
+    from impactlens.geo.pipeline import town_vegetation
+
+    # 64x64 px of 10 m. Vegetated (NDVI 0.6) in the west 32 columns only; a paddy covers
+    # the top half of that. So the town's vegetated land outside the paddy = 32x32 px = 10.24 ha.
+    ndvi = np.zeros((64, 64), np.float32)
+    ndvi[:, :32] = 0.6
+    profile = {"driver": "GTiff", "width": 64, "height": 64, "crs": UTM, "transform": TRANSFORM,
+               "count": 1, "dtype": "float32"}  # fmt: skip
+    with rasterio.open(tmp_path / "ndvi_before.tif", "w", **profile) as dst:
+        dst.write(ndvi, 1)
+    with rasterio.open(tmp_path / "valid.tif", "w", **{**profile, "dtype": "uint8"}) as dst:
+        dst.write(np.ones((64, 64), np.uint8), 1)
+    town = {"name": "Albal", "geometry": mapping(box(LEFT, TOP - 640, LEFT + 640, TOP))}
+    paddy = mapping(box(LEFT, TOP - 320, LEFT + 320, TOP))
+    rows = [{"name": "Albal", "ndvi_drop_ha_outside_rice_paddies": 2.56}]
+    town_vegetation(tmp_path, [town], [paddy], rows)
+    assert rows[0]["vegetated_ha_outside_rice_paddies"] == pytest.approx(10.24, abs=0.05)
+    assert rows[0]["ndvi_drop_pct_of_vegetated"] == pytest.approx(25.0, abs=0.2)
+
+
 def test_index_agreement_is_perfect_for_an_index_like_model():
     before, after = _scene()
     out = layers.compute_layers(before, after, _water_model, _no_change)
@@ -157,6 +178,34 @@ def test_relation_multipolygon_with_a_hole():
                        {"type": "way", "role": "inner", "geometry": _way(inner)}]}  # fmt: skip
     (feat,) = osm.landuse_features({"elements": [rel]})
     assert feat["lu_class"] == "rice_paddy" and shape(feat["geometry"]).area == pytest.approx(15)
+
+
+def _coast(*pts):
+    return {"elements": [{"type": "way", "id": 7, "tags": {"natural": "coastline"},
+                          "geometry": [{"lon": x, "lat": y} for x, y in pts]}]}  # fmt: skip
+
+
+def test_land_is_left_of_the_coastline():
+    bbox = box(0, 0, 1, 1)
+    # drawn south -> north at x = 0.6: land on the LEFT = west; the way overshoots the bbox
+    land = osm.land_polygon(_coast((0.6, -1), (0.6, 2)), bbox)
+    assert land.area == pytest.approx(0.6) and land.centroid.x < 0.5
+    # drawn north -> south: the sea is west instead
+    land = osm.land_polygon(_coast((0.6, 2), (0.6, -1)), bbox)
+    assert land.area == pytest.approx(0.4) and land.centroid.x > 0.6
+    # a bent coast still works, and no coastline at all means an inland AOI
+    land = osm.land_polygon(_coast((0.5, -1), (0.5, 0.5), (0.8, 0.6), (0.8, 2)), bbox)
+    assert land.contains(box(0, 0, 0.45, 1)) and not land.intersects(box(0.85, 0, 1, 1))
+    assert osm.land_polygon({"elements": []}, bbox).equals(bbox)
+
+
+def test_municipalities_keep_name_and_outline():
+    rel = {"type": "relation", "id": 3, "tags": {"name": "Catarroja", "admin_level": "8"},
+           "members": [{"type": "way", "role": "outer",
+                        "geometry": [{"lon": x, "lat": y} for x, y in
+                                     [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]]}]}  # fmt: skip
+    (town,) = osm.municipalities({"elements": [rel]})
+    assert town["name"] == "Catarroja" and shape(town["geometry"]).area == pytest.approx(1)
 
 
 def test_open_way_is_skipped():
@@ -227,6 +276,62 @@ def test_rollup_hectares_severity_paddies_and_hotspots(db):
     # hotspots: the 4 paddy blocks are 20 m apart -> one cluster; the lone orchard block is noise
     assert s["n_hotspots"] == 1 and s["hotspots"][0]["main_lu_class"] == "rice_paddy"
     assert s["hotspots"][0]["flooded_ha"] == pytest.approx(20, abs=0.2)
+
+
+def test_sea_never_enters_a_total_and_impacts_split_by_town(db):
+    # 1 km x 1 km AOI: west 800 m is land (paddy 0-400 m, residential orchard town 400-800 m),
+    # east 200 m is sea. One town covers the east half of the land (400-800 m).
+    aoi = box(LEFT, TOP - 1000, LEFT + 1000, TOP)
+    land = box(LEFT, TOP - 1000, LEFT + 800, TOP)
+    paddy, orchard = (
+        box(LEFT, TOP - 1000, LEFT + 400, TOP),
+        box(LEFT + 400, TOP - 500, LEFT + 800, TOP),
+    )
+    houses = box(LEFT + 400, TOP - 1000, LEFT + 800, TOP - 500)
+    landuse = [
+        {"osm_id": "way/1", "landuse": "paddy", "crop": None, "name": None,
+         "lu_class": "rice_paddy", "geometry": _lonlat(paddy)},
+        {"osm_id": "way/2", "landuse": "orchard", "crop": None, "name": None,
+         "lu_class": "orchard", "geometry": _lonlat(orchard)},
+        {"osm_id": "way/3", "landuse": "residential", "crop": None, "name": None,
+         "lu_class": "residential", "geometry": _lonlat(houses)},
+    ]  # fmt: skip
+    town = {"osm_id": "relation/5", "name": "Massanassa",
+            "geometry": _lonlat(box(LEFT + 400, TOP - 1000, LEFT + 1000, TOP))}  # fmt: skip
+
+    def poly(x0, y0, x1, y1, conf=0.9):
+        g = box(LEFT + x0, TOP - y1, LEFT + x1, TOP - y0)
+        return {"geometry": mapping(g), "mean_conf": conf, "pixels": 100}
+
+    impacts = {
+        # 4 ha flooded in the paddy, 10 ha flooded in the SEA (must not count anywhere)
+        "flooded": [poly(0, 0, 200, 200), poly(820, 0, 1000, 555.6)],
+        # 2 ha NDVI drop in the orchard, 1 ha in the paddy
+        "ndvi_drop": [poly(500, 0, 600, 200), poly(0, 900, 100, 1000)],
+        # 3 ha change on residential, 1 ha on the orchard (not urban)
+        "changed": [poly(400, 600, 700, 700), poly(700, 0, 800, 100)],
+    }
+    postgis.load(db, aoi.wkt, 32630, landuse, impacts, _lonlat(land), [town])
+    postgis.rollup(db)
+    s = postgis.build_summary(db, {})
+
+    assert "sea" not in s["by_landuse"]
+    assert s["totals"]["land_ha"] == pytest.approx(80, abs=0.5)
+    assert s["totals"]["flooded_ha_on_land"] == pytest.approx(4, abs=0.1)
+    assert s["excluded"]["sea_flooded_ha"] == pytest.approx(10, abs=0.2)
+    imp = s["impacts"]
+    assert imp["standing_water"]["in_rice_paddies_ha"] == pytest.approx(4, abs=0.1)
+    assert imp["standing_water"]["outside_rice_paddies_ha"] == pytest.approx(0, abs=0.01)
+    veg = imp["vegetation_loss_likely_mud"]
+    assert veg["ndvi_drop_ha_outside_rice_paddies"] == pytest.approx(2, abs=0.05)
+    assert veg["ndvi_drop_ha_in_rice_paddies_not_counted"] == pytest.approx(1, abs=0.05)
+    assert veg["by_town"]["Massanassa"] == pytest.approx(2, abs=0.05)
+    assert imp["urban_change"]["changed_ha_on_urban_land"] == pytest.approx(3, abs=0.05)
+    (t,) = s["by_town"]
+    # the town is 60 ha, but only its 40 ha of land is inside the AOI (20 ha is sea)
+    assert t["land_in_aoi_ha"] == pytest.approx(40, abs=0.5)
+    assert t["ndvi_drop_by_landuse"] == {"orchard": pytest.approx(2, abs=0.05)}
+    assert t["urban_changed_ha"] == pytest.approx(3, abs=0.05)
 
 
 def test_geojson_export_is_lonlat(db, tmp_path):

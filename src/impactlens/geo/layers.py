@@ -177,7 +177,7 @@ def quicklook(before: np.ndarray, after: np.ndarray, layers: dict, path: Path, t
 
 
 def rollup_map(layers_dir: Path, paddies: list[dict], hotspots: list[dict], summary: dict,
-               path: Path) -> Path:  # fmt: skip
+               path: Path, aoi: dict | None = None, land: dict | None = None) -> Path:  # fmt: skip
     """Flooded pixels with rice-paddy outlines and the hotspot boxes: shows the confound."""
     import matplotlib
 
@@ -187,12 +187,16 @@ def rollup_map(layers_dir: Path, paddies: list[dict], hotspots: list[dict], summ
     from shapely.geometry import shape
 
     with rasterio.open(layers_dir / "flooded.tif") as src:
-        flooded, b = src.read(1).astype(bool), src.bounds
+        flooded, b, transform = src.read(1).astype(bool), src.bounds, src.transform
     with rasterio.open(layers_dir / "permanent_water.tif") as src:
         perm = src.read(1).astype(bool)
     img = np.ones((*flooded.shape, 3)) * 0.93
     img[perm] = (0.6, 0.72, 0.95)
     img[flooded] = (0.9, 0.15, 0.1)
+    if aoi is not None and land is not None:  # grey out the sea and the area outside the AOI
+        in_aoi, on_land = _masks(aoi, land, flooded.shape, transform)
+        img[in_aoi & ~on_land] = (0.8, 0.86, 0.95)
+        img[~in_aoi] = 1.0
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.imshow(img, extent=(b.left, b.right, b.bottom, b.top))
     for g in paddies:
@@ -208,7 +212,7 @@ def rollup_map(layers_dir: Path, paddies: list[dict], hotspots: list[dict], summ
         f"Flooded (red), permanent water (blue), OSM rice paddies (green outline)\n"
         f"flooded on land {t['flooded_ha_on_land']:.0f} ha, of which in rice paddies "
         f"{rp['flooded_ha']:.0f} ha ({rp['share_of_flooded_land_pct']:.0f}%): seasonal flooding "
-        "confound",
+        "confound. Sea (pale) is masked out",
         fontsize=11,
     )
     ax.set_xlabel("UTM 30N easting (m)")
@@ -216,6 +220,83 @@ def rollup_map(layers_dir: Path, paddies: list[dict], hotspots: list[dict], summ
     ax.text(0.01, 0.01, "Land use (c) OpenStreetMap contributors", transform=ax.transAxes,
             fontsize=8)  # fmt: skip
     fig.tight_layout()
+    fig.savefig(path, dpi=80)
+    plt.close(fig)
+    return path
+
+
+def _masks(aoi: dict, land: dict, hw, transform):
+    from rasterio.features import rasterize
+
+    in_aoi = rasterize([(aoi, 1)], out_shape=hw, transform=transform) > 0
+    return in_aoi, in_aoi & (rasterize([(land, 1)], out_shape=hw, transform=transform) > 0)
+
+
+def ndvi_drop_map(after_tif: Path, layers_dir: Path, paddies: list[dict], towns: list[dict],
+                  aoi: dict, land: dict, summary: dict, path: Path) -> Path:  # fmt: skip
+    """NDVI drop outside paddies (orange) vs inside paddies (purple), with town outlines.
+
+    Background = the after image in grey, sea masked out. Each town is labelled with its NDVI
+    drop outside the paddies, the candidate mud / damage footprint.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import rasterio
+    from rasterio.features import rasterize
+    from shapely.geometry import shape
+
+    with rasterio.open(after_tif) as src:
+        after, b, transform = src.read([1, 2, 3]), src.bounds, src.transform
+    with rasterio.open(layers_dir / "ndvi_dropped.tif") as src:
+        dropped = src.read(1).astype(bool)
+    shape_hw = dropped.shape
+    in_aoi, on_land = _masks(aoi, land, shape_hw, transform)
+    in_paddy = (rasterize(((g, 1) for g in paddies), out_shape=shape_hw, transform=transform) > 0
+                if paddies else np.zeros(shape_hw, bool))  # fmt: skip
+
+    grey = np.clip(after.mean(0) / 0.25, 0, 1) * 0.6 + 0.3
+    img = np.stack([grey] * 3, -1)
+    img[in_aoi & ~on_land] = (0.85, 0.9, 0.97)  # sea: masked out, never counted
+    img[~in_aoi] = 1.0  # outside the AOI
+    img[dropped & on_land & ~in_paddy] = (0.93, 0.45, 0.05)  # orange: candidate mud / damage
+    img[dropped & on_land & in_paddy] = (0.55, 0.3, 0.75)  # purple: in paddies, not counted
+
+    fig, ax = plt.subplots(figsize=(11, 10))
+    ax.imshow(img, extent=(b.left, b.right, b.bottom, b.top))
+    by_name = {t["name"]: t for t in summary["by_town"]}
+    for t in towns:
+        if t["name"] not in by_name:
+            continue
+        geom = shape(t["geometry"])
+        for poly in getattr(geom, "geoms", [geom]):
+            ax.plot(*poly.exterior.xy, color="k", lw=0.7)
+        row = by_name[t["name"]]
+        rate = row.get("ndvi_drop_pct_of_vegetated")
+        label = f"{t['name']}\n{row['ndvi_drop_ha_outside_rice_paddies']:.0f} ha"
+        if rate is not None and row.get("vegetated_ha_outside_rice_paddies", 0) >= 50:
+            label += f" ({rate:.0f}%)"  # % of its vegetated land; skipped for tiny bases
+        if geom.area > 2e6:  # label towns with more than 200 ha in the AOI
+            p = geom.representative_point()
+            ax.text(p.x, p.y, label, fontsize=8, ha="center",
+                    bbox={"fc": "white", "alpha": 0.7, "lw": 0, "pad": 1})  # fmt: skip
+    v = summary["impacts"]["vegetation_loss_likely_mud"]
+    ax.set_title(
+        "NDVI drop > 0.2 on vegetated land: outside rice paddies (orange), in paddies (purple)\n"
+        f"outside paddies {v['ndvi_drop_ha_outside_rice_paddies']:.0f} ha, in paddies "
+        f"{v['ndvi_drop_ha_in_rice_paddies_not_counted']:.0f} ha; sea masked (pale blue); "
+        "black = municipalities",
+        fontsize=11,
+    )
+    ax.set_xlim(b.left, b.right)
+    ax.set_ylim(b.bottom, b.top)
+    ax.set_xlabel("UTM 30N easting (m)")
+    ax.set_ylabel("northing (m)")
+    ax.text(0.01, 0.01, "Boundaries and land use (c) OpenStreetMap contributors",
+            transform=ax.transAxes, fontsize=8)  # fmt: skip
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=80)
     plt.close(fig)
     return path

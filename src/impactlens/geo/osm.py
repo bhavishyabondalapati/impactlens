@@ -47,6 +47,20 @@ def overpass_query(south: float, west: float, north: float, east: float) -> str:
     )
 
 
+def coastline_query(south: float, west: float, north: float, east: float) -> str:
+    bbox = f"{south},{west},{north},{east}"
+    return f'[out:json][timeout:180];way["natural"="coastline"]({bbox});out geom;'
+
+
+def municipality_query(south: float, west: float, north: float, east: float) -> str:
+    """Municipalities (admin_level 8 in Spain) touching the bbox, with their full outline."""
+    bbox = f"{south},{west},{north},{east}"
+    return (
+        '[out:json][timeout:180];relation["boundary"="administrative"]["admin_level"="8"]'
+        f"({bbox});out geom;"
+    )
+
+
 def fetch_overpass(query: str, cache: Path, retries: int = 5, log=print) -> dict:
     """Run the query (or read the cache). Retries with exponential backoff across mirrors."""
     if cache.exists():
@@ -134,3 +148,51 @@ def landuse_features(data: dict) -> list[dict]:
             "geometry": mapping(geom),
         })  # fmt: skip
     return feats
+
+
+def municipalities(data: dict) -> list[dict]:
+    """Town outlines (lon/lat) from a municipality_query result."""
+    towns = []
+    for el in data.get("elements", []):
+        geom = element_geometry(el)
+        if geom is not None and not geom.is_empty:
+            name = el.get("tags", {}).get("name", f"relation/{el['id']}")
+            towns.append({"osm_id": f"relation/{el['id']}", "name": name,
+                          "geometry": mapping(geom)})  # fmt: skip
+    return towns
+
+
+def land_polygon(data: dict, bbox: Polygon):
+    """The land part of ``bbox`` (lon/lat), cut out along OSM's natural=coastline ways.
+
+    OSM convention: a coastline way is drawn with the LAND ON ITS LEFT and the sea on its right.
+    We cut the bbox into pieces along the coastline, then keep each piece whose coastline edge
+    has the piece on its left. No coastline in the bbox = all land (an inland AOI).
+    """
+    lines = [LineString(_ring(el["geometry"])) for el in data.get("elements", [])
+             if el.get("type") == "way" and len(el.get("geometry", [])) >= 2]  # fmt: skip
+    if not lines:
+        return bbox
+    coast = unary_union(lines).intersection(bbox)
+    segments = []  # every straight piece of coastline inside the bbox, in drawing order
+    for line in getattr(coast, "geoms", [coast]):
+        if isinstance(line, LineString):
+            segments += list(zip(line.coords[:-1], line.coords[1:], strict=True))
+    # unary_union "nodes" the lines (splits them where they cross) so polygonize finds the pieces
+    pieces = list(polygonize(unary_union([bbox.boundary, coast])))
+    land = [p for p in pieces if _left_of_coast(p, segments)]
+    return unary_union(land) if land else Polygon()
+
+
+def _left_of_coast(piece: Polygon, segments, eps: float = 1e-7) -> bool:
+    from shapely.geometry import Point
+
+    edge = piece.boundary
+    for (x0, y0), (x1, y1) in segments:
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        if edge.distance(Point(mx, my)) > eps:
+            continue  # this coastline segment is not on the piece's edge
+        length = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 or 1.0
+        left = Point(mx - (y1 - y0) / length * 1e-6, my + (x1 - x0) / length * 1e-6)
+        return piece.contains(left)  # a step to the LEFT of the coast lands inside = land
+    return True  # touches no coastline: an inland piece

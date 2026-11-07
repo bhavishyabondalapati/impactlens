@@ -4,6 +4,14 @@ CREATE INDEX ON landuse USING gist (geom);
 CREATE INDEX ON impact USING gist (geom);
 ANALYZE landuse; ANALYZE impact;
 
+-- 0. Land part of the AOI: AOI clipped to the land side of the OSM coastline. Everything else
+--    in the AOI is open sea, which becomes its own class and never enters a land total.
+DROP TABLE IF EXISTS land_aoi;
+CREATE TABLE land_aoi AS
+SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_Intersection(
+           (SELECT ST_UnaryUnion(ST_Collect(geom)) FROM land), a.geom)), 3)) AS geom
+FROM aoi a;
+
 -- 1. Exclusive land cover: OSM polygons overlap (an orchard inside a big farmland polygon), so
 --    for per-TYPE totals each piece of ground goes to exactly one class, by priority.
 DROP TABLE IF EXISTS landcover;
@@ -13,7 +21,8 @@ WITH prio(lu_class, rank) AS (VALUES
     ('orchard', 5), ('farmland', 6), ('wetland', 7), ('other', 8)),
 merged AS (
     SELECT p.lu_class, p.rank, ST_UnaryUnion(ST_Collect(ST_Intersection(l.geom, a.geom))) AS geom
-    FROM landuse l JOIN prio p USING (lu_class) CROSS JOIN aoi a
+    FROM landuse l JOIN prio p USING (lu_class) CROSS JOIN land_aoi a
+    WHERE ST_Intersects(l.geom, a.geom)
     GROUP BY p.lu_class, p.rank)
 SELECT m.lu_class, m.rank,
        ST_Multi(ST_CollectionExtract(ST_MakeValid(COALESCE(
@@ -21,18 +30,24 @@ SELECT m.lu_class, m.rank,
                                   WHERE h.rank < m.rank)),
            m.geom)), 3)) AS geom
 FROM merged m;
--- "unmapped": inside the AOI but in no OSM land-use polygon (includes the open sea)
+-- "unmapped": land inside the AOI with no OSM land-use polygon (roads, beaches, gaps in OSM)
 INSERT INTO landcover
-SELECT 'unmapped', 99, ST_Multi(ST_CollectionExtract(ST_MakeValid(
-    ST_Difference(a.geom, (SELECT ST_UnaryUnion(ST_Collect(geom)) FROM landcover))), 3))
-FROM aoi a;
+SELECT 'unmapped', 99, ST_Multi(ST_CollectionExtract(ST_MakeValid(COALESCE(
+    ST_Difference(a.geom, (SELECT ST_UnaryUnion(ST_Collect(geom)) FROM landcover)), a.geom)), 3))
+FROM land_aoi a;
+-- "sea": the AOI outside the coastline. Kept as a class only so we can show what we excluded.
+INSERT INTO landcover
+SELECT 'sea', 100, ST_Multi(ST_CollectionExtract(ST_MakeValid(COALESCE(
+    ST_Difference(a.geom, l.geom), a.geom)), 3))
+FROM aoi a CROSS JOIN land_aoi l;
+DELETE FROM landcover WHERE ST_IsEmpty(geom);
 CREATE INDEX ON landcover USING gist (geom);
 
--- Land = mapped land use that is not open water. Hotspots are searched here only.
+-- Land = everything except open water and the sea. Hotspots are searched here only.
 DROP TABLE IF EXISTS landmask;
 CREATE TABLE landmask AS
 SELECT ST_UnaryUnion(ST_Collect(geom)) AS geom FROM landcover
-WHERE lu_class NOT IN ('water', 'unmapped');
+WHERE lu_class NOT IN ('water', 'sea');
 
 -- 2. Hectares per land-use TYPE and impact kind (+ area-weighted mean confidence).
 DROP TABLE IF EXISTS type_impact;
@@ -51,7 +66,7 @@ DROP TABLE IF EXISTS plot_impact;
 CREATE TABLE plot_impact AS
 WITH clipped AS (
     SELECT l.id, ST_Intersection(l.geom, a.geom) AS geom
-    FROM landuse l CROSS JOIN aoi a WHERE ST_Intersects(l.geom, a.geom)),
+    FROM landuse l CROSS JOIN land_aoi a WHERE ST_Intersects(l.geom, a.geom)),
 hits AS (
     SELECT c.id, i.kind,
            SUM(ST_Area(ST_Intersection(c.geom, i.geom))) AS m2,
@@ -102,3 +117,21 @@ SELECT a.*,
         FROM landcover c WHERE c.lu_class = 'rice_paddy' AND ST_Intersects(c.geom, a.geom))
         AS rice_paddy_ha
 FROM agg a;
+
+-- 5. Per TOWN (municipality) and land-cover class: impacted hectares per kind.
+--    town_cover = each town's land inside the AOI, split by exclusive land-cover class.
+DROP TABLE IF EXISTS town_cover;
+CREATE TABLE town_cover AS
+SELECT t.osm_id, t.name, c.lu_class,
+       ST_Multi(ST_CollectionExtract(ST_Intersection(t.geom, c.geom), 3)) AS geom
+FROM town t JOIN landcover c ON ST_Intersects(t.geom, c.geom)
+WHERE c.lu_class <> 'sea';
+DELETE FROM town_cover WHERE ST_IsEmpty(geom);
+CREATE INDEX ON town_cover USING gist (geom);
+
+DROP TABLE IF EXISTS town_impact;
+CREATE TABLE town_impact AS
+SELECT tc.osm_id, tc.name, tc.lu_class, i.kind,
+       SUM(ST_Area(ST_Intersection(tc.geom, i.geom))) / 1e4 AS impacted_ha
+FROM town_cover tc JOIN impact i ON ST_Intersects(tc.geom, i.geom)
+GROUP BY tc.osm_id, tc.name, tc.lu_class, i.kind;
