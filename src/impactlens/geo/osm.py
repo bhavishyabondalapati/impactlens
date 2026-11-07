@@ -62,9 +62,15 @@ def municipality_query(south: float, west: float, north: float, east: float) -> 
 
 
 def fetch_overpass(query: str, cache: Path, retries: int = 5, log=print) -> dict:
-    """Run the query (or read the cache). Retries with exponential backoff across mirrors."""
+    """Run the query (or read the cache). Retries with exponential backoff across mirrors.
+
+    The cache stores its query, so a changed AOI (new bbox) is refetched, never served stale.
+    """
     if cache.exists():
-        return json.loads(cache.read_text())
+        cached = json.loads(cache.read_text())
+        if cached.get("_query") == query:
+            return cached
+        log(f"  {cache} was made for a different query (AOI changed?); refetching")
     body = urllib.parse.urlencode({"data": query}).encode()
     wait, last_err = 10, None
     for attempt in range(retries):
@@ -73,6 +79,7 @@ def fetch_overpass(query: str, cache: Path, retries: int = 5, log=print) -> dict
             req = urllib.request.Request(url, data=body, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=240) as resp:
                 data = json.loads(resp.read())
+            data["_query"] = query
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(data))
             return data

@@ -350,3 +350,23 @@ def test_geojson_export_is_lonlat(db, tmp_path):
     assert -4 < lon < 0 and 39 < lat < 40  # Spain, not UTM metres
     assert feat["properties"]["flooded_ha"] == pytest.approx(1, abs=0.05)
     assert "geom" not in feat["properties"]
+
+
+def test_osm_cache_is_refetched_when_the_query_changes(tmp_path, monkeypatch):
+    cache = tmp_path / "aoi_landuse.json"
+    cache.write_text(json.dumps({"_query": "old bbox", "elements": [1]}))
+    assert osm.fetch_overpass("old bbox", cache) == {"_query": "old bbox", "elements": [1]}
+
+    class Resp:  # a fake Overpass answer
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"elements": [2]}'
+
+    monkeypatch.setattr(osm.urllib.request, "urlopen", lambda *a, **k: Resp())
+    data = osm.fetch_overpass("new bbox", cache, log=lambda *a: None)
+    assert data["elements"] == [2] and json.loads(cache.read_text())["_query"] == "new bbox"
