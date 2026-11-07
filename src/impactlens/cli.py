@@ -37,6 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
     rollup.add_argument("--map", type=Path, default=None, help="rollup map PNG (optional)")
     rollup.add_argument("--ndvi-map", type=Path, default=None,
                         help="NDVI-drop by town map PNG (optional)")  # fmt: skip
+
+    sub.add_parser("sops", help="Download the SOP corpus, chunk, embed, build the FAISS index")
+
+    report = sub.add_parser("report", help="Run the 6-agent graph and write 3 validated reports")
+    report.add_argument("--scene", type=Path, default=Path("data/processed/valencia_albufera"))
+    report.add_argument("--aoi", type=Path, default=Path("aoi/valencia_albufera.geojson"))
+    report.add_argument("--model", default="claude-haiku-4-5")
+    report.add_argument("--budget", type=float, default=0.10, help="hard cost cap per run, USD")
+    report.add_argument("--rerun-steps", action="store_true",
+                        help="re-run inference and rollup even if their outputs exist")  # fmt: skip
     return parser
 
 
@@ -63,7 +73,40 @@ def main(argv: list[str] | None = None) -> int:
 
         run_rollup(args.scene, args.scene / "layers", args.aoi, args.scene / "geo",
                    Path("data/raw/osm"), args.map, args.ndvi_map)  # fmt: skip
+    elif args.command == "sops":
+        from impactlens.agents import rag
+
+        rag.download()
+        chunks = rag.build_chunks()
+        out = rag.build_index(chunks, rag.Embedder())
+        print(f"{len(chunks)} chunks indexed in {out}/ (sources: {rag.SOP_DIR}/sources.md)")
+    elif args.command == "report":
+        return run_report(args)
     return 0
+
+
+def run_report(args) -> int:
+    import time
+
+    from impactlens.agents.graph import build_graph, save_run
+    from impactlens.agents.llm import AnthropicLLM, CostTracker
+    from impactlens.agents.rag import Retriever
+
+    out = Path("build/reports") / time.strftime("%Y%m%d-%H%M%S")
+    tracker = CostTracker(args.model, args.budget, log_path=out / "tokens.jsonl")
+    graph = build_graph(AnthropicLLM(tracker), Retriever())
+    state = graph.invoke({"scene_dir": str(args.scene), "aoi": str(args.aoi),
+                          "run_steps": args.rerun_steps, "log": []})  # fmt: skip
+    save_run(state, tracker, out)
+    for line in state["log"]:
+        print(line)
+    t = tracker.totals()
+    print(
+        f"\nstatus: {state['status']}  |  {t['calls']} LLM calls, {t['input_tokens']} in / "
+        f"{t['output_tokens']} out / {t['cache_read_input_tokens']} cache-read tokens, "
+        f"${t['cost_usd']:.4f} of ${t['budget_usd']:.2f} cap  |  {out}/"
+    )
+    return 0 if state["status"] == "validated" else 3
 
 
 if __name__ == "__main__":
