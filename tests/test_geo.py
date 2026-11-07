@@ -163,6 +163,8 @@ def test_classify_rice_orchard_and_others():
     assert osm.classify({"landuse": "retail"}) == "industrial"
     assert osm.classify({"natural": "water"}) == "water"
     assert osm.classify({"landuse": "grass"}) == "other"
+    assert osm.classify({"landuse": "harbour"}) == "port"
+    assert osm.classify({"landuse": "industrial", "industrial": "port"}) == "port"
 
 
 def _way(coords):
@@ -332,6 +334,32 @@ def test_sea_never_enters_a_total_and_impacts_split_by_town(db):
     assert t["land_in_aoi_ha"] == pytest.approx(40, abs=0.5)
     assert t["ndvi_drop_by_landuse"] == {"orchard": pytest.approx(2, abs=0.05)}
     assert t["urban_changed_ha"] == pytest.approx(3, abs=0.05)
+
+
+def test_port_change_is_reported_apart_from_urban_change(db):
+    # west half industrial estate, east half a harbour that OSM also tags as industrial inside
+    aoi = box(LEFT, TOP - 1000, LEFT + 1000, TOP)
+    estate, harbour = (
+        box(LEFT, TOP - 1000, LEFT + 500, TOP),
+        box(LEFT + 500, TOP - 1000, LEFT + 1000, TOP),
+    )
+    landuse = [
+        {"osm_id": "way/1", "landuse": "industrial", "crop": None, "name": None,
+         "lu_class": "industrial", "geometry": _lonlat(estate)},
+        {"osm_id": "way/2", "landuse": "harbour", "crop": None, "name": "Port",
+         "lu_class": "port", "geometry": _lonlat(harbour)},
+        {"osm_id": "way/3", "landuse": "industrial", "crop": None, "name": "Terminal",
+         "lu_class": "industrial", "geometry": _lonlat(harbour)},
+    ]  # fmt: skip
+    changed = [{"geometry": mapping(box(LEFT + x, TOP - 300, LEFT + x + 100, TOP)),
+                "mean_conf": 0.9, "pixels": 300} for x in (100, 700)]  # fmt: skip
+    postgis.load(db, aoi.wkt, 32630, landuse, {"flooded": [], "ndvi_drop": [],
+                                               "changed": changed})  # fmt: skip
+    postgis.rollup(db)
+    u = postgis.build_summary(db, {})["impacts"]["urban_change"]
+    assert u["changed_ha_on_urban_land"] == pytest.approx(3, abs=0.05)  # estate only
+    assert u["port_excluded"]["changed_ha"] == pytest.approx(3, abs=0.05)
+    assert u["port_excluded"]["area_ha"] == pytest.approx(50, abs=0.5)
 
 
 def test_geojson_export_is_lonlat(db, tmp_path):

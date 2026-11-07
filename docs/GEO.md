@@ -27,7 +27,7 @@ Outputs (gitignored, under `data/processed/valencia_albufera/`):
    OSM `natural=coastline` ways (OSM draws them with land on the left); the sea side enters no
    total. Cross-check: 98.7% of that sea is MNDWI water on the before date.
 5. **Spatial SQL** (`geo/sql/rollup.sql`, all in EPSG:32630 metres):
-   - exclusive land cover per type (OSM polygons overlap; priority rice_paddy > water >
+   - exclusive land cover per type (OSM polygons overlap; priority rice_paddy > water > port >
      residential > industrial > orchard > farmland > wetland > other; rest of the land =
      `unmapped`, mostly huerta fields OSM has not tagged; the sea is its own excluded class)
    - hectares per plot and per type for flooded / changed / NDVI drop
@@ -37,7 +37,8 @@ Outputs (gitignored, under `data/processed/valencia_albufera/`):
 6. **Impacts split three ways** in `summary.json` -> `impacts`: `standing_water`
    (paddy-confounded), `vegetation_loss_likely_mud` (NDVI drop outside paddies, with a per-town
    rate = drop / vegetated land outside paddies), `urban_change` (OSCD change on residential +
-   industrial land only). Sea numbers live under `excluded`, never in a total.
+   industrial land only; the port is a separate line). Sea numbers live under `excluded`, never
+   in a total.
 
 ## Valencia results (before 2024-10-26, after 2024-11-10)
 
@@ -51,7 +52,8 @@ Paiporta and the other l'Horta Sud towns; re-fetching picked the same two scenes
 | ...outside rice paddies | 45 | |
 | Vegetation loss / likely mud (NDVI drop outside paddies) | 643 | candidate damage footprint |
 | NDVI drop inside paddies (not counted above) | 542 | harvest / paddy flooding, ambiguous |
-| Change on urban land (OSCD model) | 222 | 163 ha industrial, 59 ha residential |
+| Change on urban land (OSCD model) | 198 | 140 ha industrial, 59 ha residential |
+| *Excluded: Port of València change* | *24* | *ships and containers moving (248 ha of port); not damage* |
 | *Excluded: sea "flooded"* | *688* | *model domain gap on the before date; never in a total* |
 
 **Day 12 is too late for water.** The DANA hit on Oct 29. By Nov 10 the standing water in
@@ -95,8 +97,10 @@ This is consistent with mud deposits and flattened vegetation, but NDVI alone ca
 harvest, ploughing and pruning also drop NDVI, and mud on streets and roofs is invisible here
 because that ground was not vegetated before. Most of the drop (422 of 643 ha) is on land with no
 OSM land-use tag, so the per-class split is weaker than the per-town one. Urban change is not
-damage by itself either: the Port of València (134 ha of industrial land in the AOI) adds about
-21 ha of "change" from ships and containers moving.
+damage by itself either. The Port of València (OSM `landuse=harbour` / `industrial=port`, 248 ha in
+the AOI) is its own land-cover class, ranked above industrial, so its 24 ha of "change" from ships
+and containers moving is reported on its own line (`urban_change.port_excluded`) and is not in
+the 198 ha.
 
 ![NDVI drop by town](images/valencia_ndvi_drop.png)
 

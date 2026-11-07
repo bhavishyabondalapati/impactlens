@@ -162,13 +162,14 @@ def build_summary(conn, context: dict) -> dict:
             "high >= 0.30, medium >= 0.10, low > 0",
             "hotspot": "ST_ClusterDBSCAN of flooded polygons on land, eps 100 m, minpoints 3",
             "landcover": "OSM polygons overlap, so per-type totals give each piece of ground to "
-            "one class by priority: rice_paddy > water > residential > industrial "
+            "one class by priority: rice_paddy > water > port > residential > industrial "
             "> orchard > farmland > wetland > other; 'unmapped' = land with no OSM land use",
             "land": "the land side of the OSM coastline (natural=coastline); the open sea is "
             "outside it and enters no total. 'on land' also leaves out the water class "
             "(the Albufera lake, canals)",
             "ndvi_drop": "NDVI before > 0.3 (vegetated) and NDVI before - after > 0.2",
-            "urban": "OSM residential + industrial/commercial/retail land",
+            "urban": "OSM residential + industrial/commercial/retail land; the port "
+            "(landuse=harbour, industrial=port) is not urban and is reported apart",
         },  # fmt: skip
         "totals": {
             "aoi_ha": _r(sum(c["area_ha"] for c in cover.values())),
@@ -214,6 +215,13 @@ def build_summary(conn, context: dict) -> dict:
                 "label": "change on urban land only",
                 "changed_ha_on_urban_land": _r(sum(urban.values())),
                 "by_class": urban,
+                "port_excluded": {
+                    "changed_ha": by_type.get("port", zero)["changed_ha"],
+                    "area_ha": by_type.get("port", zero)["area_ha"],
+                    "note": "Port of Valencia (OSM landuse=harbour / industrial=port): ships "
+                    "and containers moving between the dates look like change. Not damage, "
+                    "not in changed_ha_on_urban_land.",
+                },
                 "by_town": {
                     t["name"]: t["urban_changed_ha"] for t in towns if t["urban_changed_ha"] > 0
                 },

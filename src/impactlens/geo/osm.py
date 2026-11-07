@@ -10,6 +10,8 @@ Every polygon gets a ``lu_class`` used in the rollups:
   orchard     landuse=orchard (around Valencia these are mostly citrus)
   farmland    other farmland, meadow, greenhouses, farmyards, vineyards
   residential residential
+  port        landuse=harbour/port or industrial=port (the Port of Valencia: ships and containers
+              moving look like "change", so it is kept apart from urban damage)
   industrial  industrial, commercial, retail
   water       natural=water (e.g. the Albufera lake)
   wetland     natural=wetland (marsh, reed beds; paddies tagged wetland=rice -> rice_paddy)
@@ -99,6 +101,8 @@ def classify(tags: dict) -> str:
         return "orchard"
     if landuse in FARMLAND:
         return "farmland"
+    if landuse in ("harbour", "port") or tags.get("industrial") == "port":
+        return "port"
     if landuse == "residential":
         return "residential"
     if landuse in INDUSTRIAL:

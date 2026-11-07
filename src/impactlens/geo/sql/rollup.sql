@@ -17,8 +17,8 @@ FROM aoi a;
 DROP TABLE IF EXISTS landcover;
 CREATE TABLE landcover AS
 WITH prio(lu_class, rank) AS (VALUES
-    ('rice_paddy', 1), ('water', 2), ('residential', 3), ('industrial', 4),
-    ('orchard', 5), ('farmland', 6), ('wetland', 7), ('other', 8)),
+    ('rice_paddy', 1), ('water', 2), ('port', 3), ('residential', 4), ('industrial', 5),
+    ('orchard', 6), ('farmland', 7), ('wetland', 8), ('other', 9)),
 merged AS (
     SELECT p.lu_class, p.rank, ST_UnaryUnion(ST_Collect(ST_Intersection(l.geom, a.geom))) AS geom
     FROM landuse l JOIN prio p USING (lu_class) CROSS JOIN land_aoi a
