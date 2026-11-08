@@ -156,13 +156,20 @@ make destroy    # remove everything (bucket contents and images included)
 There is no NAT gateway and no VPC, because the Lambdas use AWS's default internet access.
 There is no database and no always-on compute.
 
-### Per run: about $0.03-0.07
+### Per run: about $0.07 (measured)
+
+The first real run (`valencia-20261107-100338`, Nov 7, 2026) took about 9.5 minutes and passed
+all three reports (two needed one retry). Lambda is slower than the laptop: Detect took 109 s
+(12 s on the laptop) and GeoAnalyze 316 s with no OSM cache yet (87 s on the laptop), because
+3,008 MB of Lambda memory gives about 1.7 vCPU.
 
 | item | per run |
 |---|---|
-| Lambda (arm64), about 500-800 GB-seconds, mostly Detect and GeoAnalyze | about $0.01 (free tier: 400,000 GB-s a month) |
-| Step Functions, 15-20 state transitions | about $0.0005 |
-| Claude Haiku 4.5: 3 reports with caching, plus any retries; hard cap $0.10 | $0.02-0.05 |
+| Lambda (arm64), about 1,400 GB-seconds: Fetch 48 s, Detect 109 s, GeoAnalyze 316 s, Report 67 + 25 s | about $0.02 (free tier: 400,000 GB-s a month) |
+| Step Functions, 16 state transitions | about $0.0004 |
+| Claude Haiku 4.5: 5 calls (3 reports + 2 retries), with caching; hard cap $0.10 | $0.053 |
+
+A second request for the same AOI reads OSM from the S3 cache, which shortens GeoAnalyze.
 
 ## Security
 
