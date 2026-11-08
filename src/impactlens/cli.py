@@ -41,6 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="postgis (docker) or shapely (no database, as in AWS)")  # fmt: skip
     rollup.add_argument("--out", type=Path, default=None, help="default: <scene>/geo")
 
+    val = sub.add_parser("validate-ems", help="Compare our layers with Copernicus EMS EMSR773")
+    val.add_argument("--scene", type=Path, default=Path("data/processed/valencia_albufera"))
+    val.add_argument("--aoi", type=Path, default=Path("aoi/valencia_albufera.geojson"))
+    val.add_argument("--ems", type=Path, default=Path("data/raw/emsr773"),
+                     help="EMSR773 DEL GeoJSON folder (docs/VALIDATION.md)")  # fmt: skip
+    val.add_argument("--map", type=Path, default=None, help="agreement map PNG (optional)")
+
     sub.add_parser("sops", help="Download the SOP corpus, chunk, embed, build the FAISS index")
     sub.add_parser("export-embedder", help="MiniLM -> ONNX (build/embedder/) for AWS Lambda")
 
@@ -87,6 +94,17 @@ def main(argv: list[str] | None = None) -> int:
         run_rollup(args.scene, args.scene / "layers", args.aoi, args.out or args.scene / "geo",
                    Path("data/raw/osm"), args.map, args.ndvi_map,
                    backend=args.backend)  # fmt: skip
+    elif args.command == "validate-ems":
+        from impactlens.geo.layers import save_json
+        from impactlens.geo.validation import compare_emsr773, validation_map
+
+        results, masks = compare_emsr773(args.scene, args.aoi, Path("data/raw/osm"), args.ems)
+        out = args.scene / "validation/emsr773.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        save_json(results, out)
+        print(f"wrote {out}")
+        if args.map:
+            print(f"map: {validation_map(args.scene / 'after.tif', masks, results, args.map)}")
     elif args.command == "sops":
         from impactlens.agents import rag
 
