@@ -176,6 +176,7 @@ from `uv.lock`.
 git clone https://github.com/bhavishyabondalapati/impactlens.git && cd impactlens
 uv sync                       # Python 3.11 + all dependencies
 cp .env.example .env          # then set ANTHROPIC_API_KEY and POSTGRES_PASSWORD in .env
+scripts/set_anthropic_key.sh .env   # optional: sets the key at a hidden prompt
 docker compose up -d          # local PostGIS (only for the PostGIS rollup and its tests)
 ```
 
@@ -294,6 +295,7 @@ Region us-east-2. Details, security and cost: [docs/AWS.md](docs/AWS.md).
 | `dataset_report.py`, `clip_report.py` | sanity statistics of the real datasets and of reflectance clipping |
 | `aws_push_image.sh`, `aws_upload_assets.sh`, `aws_set_key.sh`, `aws_demo.sh`, `aws_local.sh` | AWS deploy steps behind the Makefile |
 | `make_request.py` | writes the Valencia request JSON |
+| `set_anthropic_key.sh` | sets `ANTHROPIC_API_KEY` in a `.env` at a hidden prompt (never on screen, in history or in `ps`) |
 | **notebooks/** | |
 | `train_kaggle.ipynb`, `kernel-metadata.json` | the Kaggle training notebook and its kernel settings |
 | **tests/** | |
