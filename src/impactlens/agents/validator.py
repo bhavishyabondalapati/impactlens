@@ -10,7 +10,7 @@ Three checks per report:
       paragraph or bullet (e.g. "paddy" + "seasonal" + "ambiguous").
   (c) citations: every sentence of the Method section (8+ words) cites an SOP chunk like [S3]
       or is tagged [project] (our own design choice), and every cited id exists. Whether the
-      cited excerpt really supports the sentence is NOT checked (see docs/AGENTS.md).
+      cited excerpt really supports the sentence is NOT checked (see docs/REPORT_AGENTS.md).
   (d) rankings: towns listed as a ranking (numbered list, or "highest", "worst", "top" ...)
       must be in the order of the fact-sheet metric the list quotes.
   (e) overclaims: "confirmed", "proven", "definitely", "certainly" are rejected in sentences
