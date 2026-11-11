@@ -1,7 +1,7 @@
 [project]
 name = "impactlens"
 version = "0.1.0"
-description = "Open reimplementation of an aerial impact-intelligence pipeline on public data"
+description = "Independent project on public data: flood and land-change mapping from Sentinel-2, with validated reports"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [

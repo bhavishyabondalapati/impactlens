@@ -2,7 +2,8 @@
 
 [![CI](https://github.com/bhavishyabondalapati/impactlens/actions/workflows/ci.yml/badge.svg)](https://github.com/bhavishyabondalapati/impactlens/actions/workflows/ci.yml)
 
-**Satellite images in, validated disaster-impact reports out, built entirely on public data.**
+**Satellite images in, validated disaster-impact reports out.** An independent project built
+entirely on public data.
 ImpactLens takes before/after Sentinel-2 images of an area, maps flood water and land change
 with two U-Nets I trained, turns the pixels into hectares per field and per town, and has six
 LLM agents write reports in which every number is checked by code. Each report is written for a
@@ -234,7 +235,7 @@ Region us-east-2. Details, security and cost: [docs/AWS.md](docs/AWS.md).
 | path | what it is |
 |---|---|
 | `README.md` | this page |
-| `CLAUDE.md` | working rules and commands for the AI coding assistant used on this repo |
+| `LICENSE` | MIT license for the code |
 | `pyproject.toml` | package metadata, dependencies, CPU-only torch on Linux, pytest markers, ruff config |
 | `uv.lock` | exact versions of every dependency |
 | `requirements.txt` | pip-style export of the lockfile (`uv export`) |
@@ -310,7 +311,7 @@ Region us-east-2. Details, security and cost: [docs/AWS.md](docs/AWS.md).
 | **docs/** | |
 | `GEO.md` | the rollup and the Valencia results in detail |
 | `VALIDATION.md` | the Copernicus EMS EMSR773 comparison |
-| `AGENTS.md` | agents, validator, cost control, SOP corpus |
+| `REPORT_AGENTS.md` | the six report agents, validator, cost control, SOP corpus |
 | `AWS.md` | architecture, deployment, cost, security |
 | `KAGGLE.md` | training on Kaggle step by step |
 | `clip_report.txt` | output of `scripts/clip_report.py` |
@@ -370,6 +371,20 @@ Seven phases, each reviewed before the next started:
 | OSCD | change labels CC BY-NC-SA ([IEEE DataPort](https://ieee-dataport.org/open-access/oscd-onera-satellite-change-detection), [authors' site](https://rcdaudt.github.io/oscd)); images are modified Copernicus data. The change model trained on it is for non-commercial use | Daudt, R. C., Le Saux, B., Boulch, A., Gousseau, Y. (2018). Urban change detection for multispectral earth observation using convolutional neural networks. IGARSS 2018 |
 | Copernicus EMS EMSR773 | free reproduction and adaptation with attribution ([terms](https://mapping.emergency.copernicus.eu/terms-and-conditions/)) | Copernicus Emergency Management Service (© 2024 European Union), [EMSR773] Valencia province (AOI01) and Horta Sud (AOI03): Delineation Maps |
 | OpenStreetMap | ODbL | © OpenStreetMap contributors |
-| Flood-response SOP documents | as stated in each document; used locally for retrieval and not redistributed | listed with URLs in [docs/AGENTS.md](docs/AGENTS.md) |
+| Flood-response SOP documents | as stated in each document; used locally for retrieval and not redistributed | listed with URLs in [docs/REPORT_AGENTS.md](docs/REPORT_AGENTS.md) |
 
 No dataset, model file, API key or `.env` is committed: `data/` and `build/` are gitignored.
+
+## License
+
+The **code** in this repository is released under the [MIT License](LICENSE). Copyright (c) 2026
+Bhavishya Bondalapati.
+
+MIT covers the code only. It does not cover:
+
+- **Datasets and imagery** (Sentinel-2, Sen1Floods11, OSCD, Copernicus EMS, OpenStreetMap, the SOP
+  documents). None are stored here, and each keeps the terms in the table above.
+- **Trained models.** No model file is in this repository. A change model trained on OSCD inherits
+  the non-commercial terms of its CC BY-NC-SA labels.
+- **The maps in `docs/images/`.** They are derived from Copernicus Sentinel data, Copernicus EMS
+  products and OpenStreetMap, and must keep those attributions.
