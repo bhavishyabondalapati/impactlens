@@ -34,3 +34,8 @@ node_modules/
 *.tfplan
 *.tfvars
 crash.log
+
+# Logs and agent instruction files
+*.log
+CLAUDE.md
+.claude/
