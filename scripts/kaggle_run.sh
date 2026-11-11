@@ -6,11 +6,16 @@
 #   4. poll until the run finishes
 #   5. download the output to build/models_<timestamp>/ and print the metrics table
 # Steps 1-3 ask first (pushing code, uploading data, spending GPU quota). KAGGLE_YES=1 skips
-# the prompts; use it only after you have said yes. Needs `kaggle auth login` done once.
+# the prompts; use it only after you have said yes. Needs `kaggle auth login` done once, and your
+# Kaggle username in KAGGLE_USERNAME (exported, or set in .env).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-KAGGLE_USER="bhavishya12345678"
+# The Kaggle username is not stored in the repo: read it from the environment, else from .env.
+if [[ -z "${KAGGLE_USERNAME:-}" && -f .env ]]; then
+  KAGGLE_USERNAME=$(grep -E '^KAGGLE_USERNAME=' .env | tail -1 | cut -d= -f2- | tr -d '"' || true)
+fi
+KAGGLE_USER="${KAGGLE_USERNAME:?Set KAGGLE_USERNAME (export it or add it to .env)}"
 DATASET="$KAGGLE_USER/impactlens-packed"
 KERNEL="$KAGGLE_USER/impactlens-train"
 DATA_DIR="build/kaggle"
@@ -63,7 +68,12 @@ fi
 
 # ---- 3. run ------------------------------------------------------------------------------
 confirm "push $KERNEL and start a GPU run (uses GPU quota)"
-kaggle kernels push -p notebooks
+# notebooks/kernel-metadata.json holds a placeholder username; push a filled-in copy.
+PUSH_DIR="build/kaggle_kernel"
+rm -rf "$PUSH_DIR" && mkdir -p "$PUSH_DIR"
+cp notebooks/train_kaggle.ipynb "$PUSH_DIR/"
+sed "s/YOUR_KAGGLE_USERNAME/$KAGGLE_USER/g" notebooks/kernel-metadata.json > "$PUSH_DIR/kernel-metadata.json"
+kaggle kernels push -p "$PUSH_DIR"
 
 # ---- 4. wait -----------------------------------------------------------------------------
 sleep 30

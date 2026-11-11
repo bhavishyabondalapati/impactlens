@@ -17,7 +17,11 @@ def test_kernel_metadata_is_private_gpu_and_uses_our_dataset():
     assert meta["enable_gpu"] is True and meta["enable_internet"] is True
     assert meta["code_file"] == "train_kaggle.ipynb"
     assert (ROOT / "notebooks" / meta["code_file"]).exists()
-    assert meta["dataset_sources"] == ["bhavishya12345678/impactlens-packed"]
+    # The committed file holds a placeholder; kaggle_run.sh fills in KAGGLE_USERNAME before pushing.
+    assert meta["id"] == "YOUR_KAGGLE_USERNAME/impactlens-train"
+    assert meta["dataset_sources"] == ["YOUR_KAGGLE_USERNAME/impactlens-packed"]
+    script = (ROOT / "scripts" / "kaggle_run.sh").read_text()
+    assert "KAGGLE_USERNAME" in script and "s/YOUR_KAGGLE_USERNAME/" in script
 
 
 def test_run_script_asks_before_push_upload_and_gpu():

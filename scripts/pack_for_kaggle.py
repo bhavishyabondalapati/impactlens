@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import warnings
 from pathlib import Path
 
@@ -69,7 +70,11 @@ def main() -> None:
     p.add_argument("--oscd-root", type=Path, default=Path("data/raw/oscd"))
     p.add_argument("--s1f-root", type=Path, default=Path("data/raw/sen1floods11"))
     p.add_argument("--out", type=Path, default=Path("build/kaggle"))
-    p.add_argument("--kaggle-user", default="bhavishya12345678")
+    p.add_argument(
+        "--kaggle-user",
+        default=os.environ.get("KAGGLE_USERNAME"),
+        help="your Kaggle username (default: the KAGGLE_USERNAME environment variable)",
+    )
     p.add_argument("--slug", default="impactlens-packed", help="Kaggle dataset name")
     p.add_argument("--no-verify", action="store_true")
     p.add_argument(
@@ -77,6 +82,8 @@ def main() -> None:
         help="pack just one file (e.g. 'floods' after the SWIR change; oscd.npz is unchanged)",
     )  # fmt: skip
     args = p.parse_args()
+    if not args.kaggle_user:
+        p.error("set KAGGLE_USERNAME or pass --kaggle-user")
 
     oscd_npz, s1f_npz = args.out / "oscd.npz", args.out / "sen1floods11.npz"
     if args.only in ("both", "oscd"):

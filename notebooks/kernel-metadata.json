@@ -1,5 +1,5 @@
 {
-  "id": "bhavishya12345678/impactlens-train",
+  "id": "YOUR_KAGGLE_USERNAME/impactlens-train",
   "title": "impactlens-train",
   "code_file": "train_kaggle.ipynb",
   "language": "python",
@@ -8,7 +8,7 @@
   "enable_gpu": true,
   "enable_tpu": false,
   "enable_internet": true,
-  "dataset_sources": ["bhavishya12345678/impactlens-packed"],
+  "dataset_sources": ["YOUR_KAGGLE_USERNAME/impactlens-packed"],
   "competition_sources": [],
   "kernel_sources": [],
   "model_sources": []

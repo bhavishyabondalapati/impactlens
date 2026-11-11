@@ -7,8 +7,8 @@ notebook.
 ## 1. Pack the data (on your Mac)
 
 ```bash
-cd ~/projects/impactlens
-uv run python scripts/pack_for_kaggle.py   # add --kaggle-user NAME if you are not bhavishya12345678
+export KAGGLE_USERNAME=your-kaggle-username   # kaggle_run.sh also reads it from .env
+uv run python scripts/pack_for_kaggle.py
 ```
 
 This writes `build/kaggle/` (gitignored): `oscd.npz`, `sen1floods11.npz`, `dataset-metadata.json`,
@@ -67,8 +67,9 @@ After `kaggle auth login` (once), one command runs a whole round. See `scripts/k
 2. Upload a new dataset version, only if the `.npz` files changed since the last upload (asks
    first). The hash of the last upload is kept in `build/.kaggle_dataset.sha256`.
 3. `kaggle kernels push -p notebooks` (asks first): uploads `notebooks/train_kaggle.ipynb` as the
-   private kernel `bhavishya12345678/impactlens-train` with GPU, internet and the dataset set
-   in `notebooks/kernel-metadata.json`, and starts a run (uses GPU quota).
+   private kernel `<your username>/impactlens-train` with GPU, internet and the dataset set
+   in `notebooks/kernel-metadata.json`, and starts a run (uses GPU quota). That file holds the
+   placeholder `YOUR_KAGGLE_USERNAME`; the script pushes a copy with `KAGGLE_USERNAME` filled in.
 4. Polls `kaggle kernels status` until the run ends.
 5. Downloads the output to `build/models_<timestamp>/` and prints a results table
    (`scripts/metrics_summary.py`). If the run failed it prints the end of the log instead.
